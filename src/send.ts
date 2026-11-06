@@ -13,7 +13,7 @@ export interface Sink {
   send(spans: OtlpSpan[]): Promise<SendResult>;
 }
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 export function otlpPayload(spans: OtlpSpan[]): unknown {
   return {

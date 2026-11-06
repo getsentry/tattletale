@@ -161,20 +161,30 @@ test("ownership: the turn whose prompt is stamped just before the first OTel spa
   assert.equal(sink.batches.flat().length, 0, "nothing from the transcript, so no double");
 });
 
-test("ownership: an unseen session falls back to the transcript after 30 idle minutes", async () => {
+test("ownership: a session opened before the switch goes back to its transcript 10 minutes into its next turn", async () => {
   const { dir } = setup();
   const S = "sess-3";
   const path = writeJsonl(join(dir, `${S}.jsonl`), [
-    cc.prompt(S, "u1", 0, "hi"),
+    cc.prompt(S, "u1", 0, "before the switch"),
     cc.assistant(S, "a1", 2, "msg_x", { type: "text", text: "ok" }, usage(1, 1, 0, 1)),
+    cc.prompt(S, "u2", 3600, "after the switch, still the old process"),
+    cc.assistant(S, "a2", 3602, "msg_z", { type: "text", text: "ok" }, usage(1, 1, 0, 1)),
   ]);
-  const mtime = Date.parse("2026-11-01T12:00:00Z");
-  utimesSync(path, new Date(mtime), new Date(mtime));
-  const config = { ...loadConfig(), claudeSource: "otel" as const, otelSince: mtime - 3600_000 };
+  const turn2 = Date.parse("2026-11-01T11:00:00Z");
+  utimesSync(path, new Date(turn2 + 2000), new Date(turn2 + 2000));
+  const config = { ...loadConfig(), claudeSource: "otel" as const, otelSince: turn2 - 600_000 };
+  assert.equal(
+    (await syncTranscript(path, { sink: memorySink(), config, final: true, now: turn2 + 60_000 })).skipped,
+    "waiting for OTel relay",
+  );
   const sink = memorySink();
-  const r = await syncTranscript(path, { sink, config, final: true, now: mtime + 31 * 60_000 });
-  assert.equal(r.skipped, undefined);
-  assert.ok(sink.batches.flat().some((x) => spanAttr(x, "gen_ai.response.id") === "msg_x"));
+  const r = await syncTranscript(path, { sink, config, final: true, now: turn2 + 11 * 60_000 });
+  assert.equal(r.skipped, undefined, "never stuck waiting, even if the session never idles");
+  const ids = sink.batches
+    .flat()
+    .filter((x) => x.name.startsWith("chat"))
+    .map((x) => spanAttr(x, "gen_ai.response.id"));
+  assert.deepEqual(ids.toSorted(), ["msg_x", "msg_z"]);
 });
 
 test("settings env: preserves other keys, refuses to override existing OTel config, removes only its own", async () => {

@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, log } from "./state.ts";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 /** Install root (repo checkout or an agent's plugin cache copy): frames under it are in-app. */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..") + "/";
 

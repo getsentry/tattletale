@@ -63,7 +63,9 @@ export interface SyncReport {
 
 const expand = (prefix: string) => prefix.replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
 
-const OTEL_GRACE_MS = 30 * 60 * 1000;
+/** The relay sees an OTel session within seconds of its first turn; one it still hasn't seen this long after its
+ *  first turn since the switch is running without telemetry (e.g. opened before the switch). */
+const OTEL_UNSEEN_MS = 10 * 60 * 1000;
 /** The transcript stamps a prompt slightly before Claude Code's OTel turn span starts. Telemetry is on from process
  *  start, so a resumed session's earlier turns are far older than this; a misjudged turn is skipped, never doubled. */
 const OTEL_OVERLAP_MS = 2 * 60 * 1000;
@@ -71,8 +73,7 @@ const OTEL_OVERLAP_MS = 2 * 60 * 1000;
 /**
  * With claudeSource "otel", each Claude Code session has exactly one source so Sentry never gets it twice:
  * turns from before the relay first saw the session come from the transcript, the rest from OTel. A session
- * touched since the switch that the relay never saw (telemetry not active there) falls back to the
- * transcript once idle; until then it waits.
+ * the relay hasn't seen 10 minutes after its first turn since the switch belongs to the transcript.
  */
 export function applyOtelOwnership(session: Session, config: Config, now: number, mtimeMs: number): "ok" | "wait" {
   if (session.agent !== "claude-code" || config.claudeSource !== "otel") return "ok";
@@ -83,8 +84,11 @@ export function applyOtelOwnership(session: Session, config: Config, now: number
     session.subagents = session.subagents.filter((r) => r.start < cutoff);
     return "ok";
   }
-  if (config.otelSince === undefined || mtimeMs < config.otelSince) return "ok";
-  return now - mtimeMs >= OTEL_GRACE_MS ? "ok" : "wait";
+  const since = config.otelSince;
+  if (since === undefined || mtimeMs < since) return "ok";
+  const firstAfterSwitch = Math.min(...session.turns.filter((t) => t.start >= since).map((t) => t.start));
+  if (!Number.isFinite(firstAfterSwitch)) return "ok";
+  return now - firstAfterSwitch >= OTEL_UNSEEN_MS ? "ok" : "wait";
 }
 
 function ignored(cwd: string | undefined, config: Config): boolean {
