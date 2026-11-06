@@ -12,7 +12,13 @@ import { basename, join } from "node:path";
 import { analyzeThread } from "./analyze.ts";
 import type { Compaction, Message, ModelCall, ParseOptions, Session, ToolCall, Turn, Usage } from "./model.ts";
 import { addUsage, emptyDiagnostics, sumCalls } from "./model.ts";
-import { asString, byteLength, countKey, hashHex, num, readJsonl, toMs } from "./util.ts";
+import { asString, byteLength, countKey, hashHex, jsonlRecords, num, toMs } from "./util.ts";
+
+/** When a rollout has task_started events, the thread's own records start at the first one. */
+export function hasTaskStarted(path: string): boolean {
+  for (const r of jsonlRecords(path)) if (r?.type === "event_msg" && r.payload?.type === "task_started") return true;
+  return false;
+}
 
 const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 /** A request can't plausibly wait this long between its last input and its first output. */
@@ -91,7 +97,6 @@ function toolOutput(raw: unknown): { text: string; error: boolean } {
 export function parseCodex(path: string, opts: ParseOptions = {}): Session {
   const now = opts.now ?? Date.now();
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
-  const file = readJsonl(path);
   const fileId =
     basename(path).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/)?.[1] ?? basename(path);
   const session: Session = {
@@ -102,7 +107,6 @@ export function parseCodex(path: string, opts: ParseOptions = {}): Session {
     subagents: [],
     diagnostics: emptyDiagnostics(),
   };
-  session.diagnostics.badLines = file.badLines;
   const diag = session.diagnostics;
 
   // Rollouts switch format mid-session in both directions (different Codex builds resuming the same
@@ -110,8 +114,7 @@ export function parseCodex(path: string, opts: ParseOptions = {}): Session {
   // token_usage_records were written in it they are exact and cover the delta; otherwise the cumulative
   // delta is the usage of the call(s) in that interval.
   let recordsSinceCount: Usage | undefined;
-  const hasTaskStarted = file.records.some((r) => r?.type === "event_msg" && r.payload?.type === "task_started");
-  let own = !hasTaskStarted;
+  let own = !hasTaskStarted(path);
   let provider = "openai";
   let model = "unknown";
   let turn: Turn | undefined;
@@ -184,7 +187,7 @@ export function parseCodex(path: string, opts: ParseOptions = {}): Session {
     }
   };
 
-  for (const rec of file.records) {
+  for (const rec of jsonlRecords(path, diag)) {
     const type = rec?.type;
     const p = rec?.payload ?? {};
     const ts = toMs(rec?.timestamp) ?? lastTs;
@@ -408,7 +411,7 @@ export function parseCodex(path: string, opts: ParseOptions = {}): Session {
   }
   closeOpen();
 
-  const idle = now - file.mtimeMs >= idleMs;
+  const idle = now - statSync(path).mtimeMs >= idleMs;
   session.turns.forEach((t, i) => {
     const last = i === session.turns.length - 1;
     t.complete = t.complete || !last || opts.final === true || idle;

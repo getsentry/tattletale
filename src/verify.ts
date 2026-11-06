@@ -1,16 +1,15 @@
 // Local reconciliation. Never sends anything. Each check compares the parser against an independent,
 // deliberately naive reading of the raw transcript, then the built spans against the parser.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import * as zlib from "node:zlib";
 import { claudeUsage } from "./claude.ts";
-import { codexUsage } from "./codex.ts";
+import { codexUsage, hasTaskStarted } from "./codex.ts";
 import type { AgentName, Usage } from "./model.ts";
 import { addUsage, sumCalls } from "./model.ts";
 import { buildSpans, spanAttr } from "./spans.ts";
 import { detectAgent, parseSession } from "./sync.ts";
-import { num } from "./util.ts";
+import { jsonlRecords, num } from "./util.ts";
 
 export interface Check {
   name: string;
@@ -40,23 +39,11 @@ function sameUsage(a: Usage | undefined, b: Usage | undefined): boolean {
   return fields.every((f) => ((a?.[f] as number) ?? 0) === ((b?.[f] as number) ?? 0));
 }
 
-function rawLines(path: string): any[] {
-  let buf = readFileSync(path);
-  if (path.endsWith(".zst")) buf = (zlib as any).zstdDecompressSync(buf);
-  const out: any[] = [];
-  for (const line of buf.toString("utf8").split("\n")) {
-    try {
-      if (line.trim()) out.push(JSON.parse(line));
-    } catch {}
-  }
-  return out;
-}
-
 /** Last usage per message.id, across files (union), among lines the owner filter accepts. */
 function naiveClaude(paths: string[], ownerId?: string): { usage?: Usage; ids: string[] } {
   const byId = new Map<string, any>();
   for (const path of paths) {
-    for (const r of rawLines(path)) {
+    for (const r of jsonlRecords(path)) {
       if (r?.type !== "assistant" || r.message?.model === "<synthetic>" || !r.message?.usage) continue;
       if (ownerId && path === paths[0] && r.sessionId !== ownerId) continue;
       // A fork can copy its parent's message mid-stream; usage only grows, so keep the largest.
@@ -119,8 +106,8 @@ export function verifyTranscript(path: string, agent: AgentName = detectAgent(pa
         detail: `parsed ${fmt(withUnattributed)} | cumulative ${fmt(ref)}`,
       });
     const records = new Map<string, any>();
-    let own = !rawLines(path).some((r) => r?.type === "event_msg" && r.payload?.type === "task_started");
-    for (const r of rawLines(path)) {
+    let own = !hasTaskStarted(path);
+    for (const r of jsonlRecords(path)) {
       if (r?.type === "event_msg" && r.payload?.type === "task_started") own = true;
       if (own && r?.type === "token_usage_record")
         records.set(r.payload?.response_id ?? JSON.stringify(r), r.payload?.usage);

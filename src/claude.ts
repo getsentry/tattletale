@@ -25,7 +25,12 @@ import type {
   Usage,
 } from "./model.ts";
 import { emptyDiagnostics } from "./model.ts";
-import { byteLength, countKey, num, readJsonl, toMs } from "./util.ts";
+import { byteLength, countKey, jsonlRecords, num, toMs } from "./util.ts";
+
+function firstTimestamp(path: string): number {
+  for (const rec of jsonlRecords(path)) if (rec?.timestamp) return toMs(rec.timestamp) ?? 0;
+  return 0;
+}
 
 const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 /** A request can't plausibly wait this long between its last input and its first output line. */
@@ -296,7 +301,6 @@ function runEnd(run: Run, floor: number): number {
 export function parseClaude(path: string, opts: ParseOptions = {}): Session {
   const now = opts.now ?? Date.now();
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
-  const file = readJsonl(path);
   const sessionId = basename(path).replace(/\.jsonl(\.zst)?$/, "");
   const session: Session = {
     agent: "claude-code",
@@ -306,7 +310,6 @@ export function parseClaude(path: string, opts: ParseOptions = {}): Session {
     subagents: [],
     diagnostics: emptyDiagnostics(),
   };
-  session.diagnostics.badLines = file.badLines;
 
   let turn: Turn | undefined;
   const markerTs = new Map<Turn, number>();
@@ -332,7 +335,7 @@ export function parseClaude(path: string, opts: ParseOptions = {}): Session {
   let lastTs = 0;
   const th = newThread(() => ensureTurn(`continuation:${sessionId}`, lastTs));
 
-  for (const rec of file.records) {
+  for (const rec of jsonlRecords(path, session.diagnostics)) {
     const type = rec?.type;
     if (type === "cost-state") {
       if (rec.sessionId === sessionId) captureCostState(session, rec);
@@ -404,7 +407,7 @@ export function parseClaude(path: string, opts: ParseOptions = {}): Session {
     if (handled.system && TURN_END_MARKERS.has(handled.system) && turn) markerTs.set(turn, ts);
   }
 
-  const idle = now - file.mtimeMs >= idleMs;
+  const idle = now - statSync(path).mtimeMs >= idleMs;
   session.turns.forEach((t, i) => {
     const last = i === session.turns.length - 1;
     const marker = markerTs.get(t) ?? 0;
@@ -474,9 +477,8 @@ function parseClaudeSubagents(
   const files = readdirSync(dir)
     .filter((n) => n.endsWith(".jsonl"))
     .map((name) => {
-      const file = readJsonl(join(dir, name));
-      const firstTs = toMs(file.records.find((r) => r?.timestamp)?.timestamp) ?? 0;
-      return { name, file, firstTs, meta: readMeta(join(dir, name.replace(/\.jsonl$/, ".meta.json"))) };
+      const file = join(dir, name);
+      return { name, file, firstTs: firstTimestamp(file), meta: readMeta(file.replace(/\.jsonl$/, ".meta.json")) };
     })
     .toSorted(
       (a, b) =>
@@ -486,7 +488,6 @@ function parseClaudeSubagents(
 
   for (const { name, file, meta } of files) {
     const agentId = name.replace(/^agent-/, "").replace(/\.jsonl$/, "");
-    session.diagnostics.badLines += file.badLines;
     const run: SubagentRun = {
       agentId,
       agentType: meta.agentType ?? "subagent",
@@ -502,7 +503,7 @@ function parseClaudeSubagents(
     const th = newThread(() => run, claimed);
     let lastTs = 0;
     let owned = 0;
-    for (const rec of file.records) {
+    for (const rec of jsonlRecords(file, session.diagnostics)) {
       if (rec?.type !== "user" && rec?.type !== "assistant" && rec?.type !== "system") {
         const at = rec?.sessionId === sessionId ? toMs(rec.timestamp) : undefined;
         if (at && at > th.lastActivity) th.lastActivity = at;
@@ -525,7 +526,7 @@ function parseClaudeSubagents(
     for (const t of th.asyncTools) asyncTools.add(t);
     const parentDone =
       run.parentToolId !== undefined && completedTools.has(run.parentToolId) && !asyncTools.has(run.parentToolId);
-    run.complete = meta.finished === true || parentDone || now - file.mtimeMs >= idleMs;
+    run.complete = meta.finished === true || parentDone || now - statSync(file).mtimeMs >= idleMs;
     run.end = runEnd(run, run.start);
     finishRun(run, run.end, run.complete, th);
     analyzeThread(th.calls, th.compactions);

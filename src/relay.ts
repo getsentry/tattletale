@@ -4,7 +4,7 @@
 //
 // It also records which sessions it has seen (and when), so transcript sync can leave those to OTel.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -17,6 +17,7 @@ import type { Sink } from "./send.ts";
 import type { OtlpSpan } from "./spans.ts";
 import { loadConfig, loadOtelSessions, loadSent, log, markOtelSession, markSent } from "./state.ts";
 import type { Config } from "./state.ts";
+import { readHead } from "./util.ts";
 
 const STRIP_IN_METADATA_MODE = new Set([
   "gen_ai.input.messages",
@@ -72,7 +73,7 @@ export function sessionInfo(sessionId: string): { cwd?: string; version?: string
     for (const dir of readdirSync(root)) {
       const path = join(root, dir, `${sessionId}.jsonl`);
       if (!existsSync(path)) continue;
-      const head = readFileSync(path, "utf8").slice(0, 256 * 1024);
+      const head = readHead(path, 256 * 1024);
       info.cwd = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(head)?.[1]?.replace(/\\(.)/g, "$1");
       info.version = /"version":"([^"]+)"/.exec(head)?.[1];
       break;
