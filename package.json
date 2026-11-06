@@ -1,0 +1,29 @@
+{
+  "name": "@sentry/tattletale",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Tattles on your coding agents: ships Claude Code and Codex sessions to Sentry agent tracing as gen_ai spans.",
+  "bin": {
+    "tattletale": "src/cli.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node --no-warnings --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "oxlint --deny-warnings",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "verify:local": "node --no-warnings src/cli.ts verify --days 30"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "oxfmt": "0.76.0",
+    "oxlint": "1.91.0",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "packageManager": "pnpm@10.28.2"
+}

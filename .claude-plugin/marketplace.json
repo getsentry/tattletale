@@ -1,0 +1,11 @@
+{
+  "name": "tattletale",
+  "owner": { "name": "tattletale" },
+  "plugins": [
+    {
+      "name": "tattletale",
+      "source": "./",
+      "description": "Ship Claude Code sessions to Sentry agent tracing."
+    }
+  ]
+}
