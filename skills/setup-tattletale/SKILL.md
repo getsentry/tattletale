@@ -63,15 +63,19 @@ npx @sentry/tattletale verify --days 1   # local token reconciliation; sends not
 npx @sentry/tattletale test-error        # optional: proves the DSN accepts events
 ```
 
-Data appears in Sentry under Explore → Conversations, usually within a few minutes. To send past sessions,
-always look before sending:
+Data appears in Sentry under Explore → Conversations, usually within a few minutes.
+
+To send past sessions (`replay`, alias `backfill`), always dry-run first and show the user the counts:
 
 ```bash
-npx @sentry/tattletale backfill --days 7 --dry-run   # shows sessions and span counts
-npx @sentry/tattletale backfill --days 7
+npx @sentry/tattletale replay --days 7 --dry-run                 # or --since 2026-10-01 [--until …]
+npx @sentry/tattletale replay --days 7
+npx @sentry/tattletale replay --session <id>                     # one session
+npx @sentry/tattletale replay <file-or-folder>                   # transcripts copied from elsewhere
 ```
 
-Re-running any of these is safe. Every span is sent at most once.
+Replays respect the scope. Spans already in Sentry are never sent twice. Sentry drops spans older than the
+project's retention, and Claude Code deletes transcripts after 30 days unless `cleanupPeriodDays` is raised.
 
 ## Change or remove
 

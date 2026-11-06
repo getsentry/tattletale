@@ -15,6 +15,7 @@ import { crossSessionDuplicates, verifyTranscript } from "./verify.ts";
 import { reportError } from "./report.ts";
 import { applyOtelEnv, claudeSettingsPath, otelEnv, removeOtelEnv } from "./claude-settings.ts";
 import { createRelay, relayAlive, serveRelay } from "./relay.ts";
+import { parseWhen, replayTargets } from "./replay.ts";
 import { loadOtelSessions } from "./state.ts";
 
 const CLI_PATH = fileURLToPath(import.meta.url);
@@ -314,6 +315,7 @@ Get started (or ask your agent to "set up tattletale"; the plugin ships a setup 
   2. tattletale install                                      hook into Claude Code and Codex
   3. tattletale status                                       confirm; Codex then asks you to approve hooks (/hooks)
   Check the data locally first (sends nothing): tattletale verify --days 7
+  Replay older sessions: tattletale replay --since 2026-10-01 --dry-run (then without --dry-run)
 
 Setup
   setup --dsn <dsn> [--include <path>|repo:<owner/name>]... [--repo <owner/name>]... [--ignore <rule>]...
@@ -326,7 +328,9 @@ Setup
 
 Data
   verify [<transcript>...] [--days 30] [--agent claude|codex] [--verbose]   token reconciliation, sends nothing
-  backfill [--days 7] [--agent claude|codex] [--dry-run] [--limit N]        send past sessions
+  replay [<file|folder>...] [--days 7 | --since <date>] [--until <date>] [--session <id>]...
+         [--agent claude|codex] [--limit N] [--dry-run]                 send past sessions (alias: backfill)
+                                            dates: 2026-10-01 or 30d; folders are searched for transcripts
   sync <transcript> [--final] [--dry-run] [--sink file:<path>]              send one session now
   spans <transcript> [--final]              print the spans that would be sent
   test-error                                send a test error event to the DSN
@@ -397,14 +401,24 @@ async function main(): Promise<number> {
       printReport(r);
       return r.error ? 1 : 0;
     }
+    case "replay":
     case "backfill": {
-      let items = sessionsFor(agentFlag(flags.agent), Number(str(flags.days) ?? 7));
-      const limit = Number(str(flags.limit) ?? 0);
-      if (limit) items = items.slice(0, limit);
-      console.log(`${items.length} sessions${flags["dry-run"] ? " (dry run)" : ""}`);
-      const reports = await syncMany(items, { dryRun: flags["dry-run"] === true }, printReport);
+      const until = str(flags.until);
+      const since =
+        str(flags.since) ?? (flags.days !== undefined || !rest.length ? `${str(flags.days) ?? 7}d` : undefined);
+      const items = replayTargets({
+        paths: rest,
+        agent: agentFlag(flags.agent),
+        since: since ? parseWhen(since) : undefined,
+        until: until ? parseWhen(until) : undefined,
+        sessions: list(flags.session),
+        limit: Number(str(flags.limit) ?? 0) || undefined,
+      });
+      const dry = flags["dry-run"] === true;
+      console.log(`${items.length} transcripts${dry ? " (dry run: nothing is sent)" : ""}`);
+      const reports = await syncMany(items, { dryRun: dry }, printReport);
       const sent = reports.reduce((n, r) => n + r.sent, 0);
-      console.log(`${flags["dry-run"] ? "would send" : "sent"} ${sent} spans`);
+      console.log(`${dry ? "would send" : "sent"} ${sent} new spans; spans already in Sentry are skipped`);
       return reports.some((r) => r.error) ? 1 : 0;
     }
     case "verify":

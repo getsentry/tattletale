@@ -55,13 +55,30 @@ Rules:
 
 Spans carry `vcs.repository.name`, so you can also slice by repo in Sentry.
 
-## Check before you send
+## Replay past sessions
+
+New sessions are sent automatically. To send older ones, use `replay` (alias `backfill`). Do a dry run first:
 
 ```bash
-npx @sentry/tattletale verify --days 7               # local token reconciliation, sends nothing
-npx @sentry/tattletale backfill --days 7 --dry-run   # what past sessions would be sent
-npx @sentry/tattletale backfill --days 7             # send them; spans are never sent twice
+npx @sentry/tattletale verify --days 7                        # local token reconciliation, sends nothing
+npx @sentry/tattletale replay --days 7 --dry-run              # what would be sent from the last week
+npx @sentry/tattletale replay --since 2026-10-01 --until 2026-10-15
+npx @sentry/tattletale replay --session 4d64aace              # one session (ID or prefix)
+npx @sentry/tattletale replay ~/Downloads/old-transcripts     # files or folders, e.g. from another machine
 ```
+
+- **Never doubles.** Spans already in Sentry are skipped, so replaying the same range twice sends nothing new.
+- **Your scope still applies.** Sessions outside your folder and repo rules are skipped.
+- **Oldest first.** Sessions are replayed in age order, so an original session claims history that a later
+  fork copied.
+- **Files and folders count as finished.** Explicit files or folders are treated as complete sessions. Folders
+  are searched for `*.jsonl` and `*.jsonl.zst`, with Codex archives included.
+
+**Limits:**
+
+- **Sentry retention.** Sentry drops spans older than the project's retention at ingest.
+- **Claude Code cleanup.** Claude Code deletes transcripts after 30 days by default. Set `cleanupPeriodDays`
+  higher in `~/.claude/settings.json` to keep more history replayable.
 
 `npx @sentry/tattletale --help` lists every command.
 
