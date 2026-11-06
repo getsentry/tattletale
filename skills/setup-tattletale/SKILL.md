@@ -36,10 +36,6 @@ decides what leaves their machine (prompts, code and tool output, scrubbed of co
 
 ## 3. Install
 
-Use the published package. Until it is published, run the same commands from a checkout instead:
-`git clone git@github.com:getsentry/tattletale.git ~/code/tattletale`, then `node ~/code/tattletale/src/cli.ts`
-in place of `npx @sentry/tattletale`.
-
 ```bash
 npx @sentry/tattletale setup --dsn '<DSN>' [scope flags from step 2]
 npx @sentry/tattletale install
