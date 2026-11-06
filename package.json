@@ -1,6 +1,6 @@
 {
   "name": "@sentry/tattletale",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Tattles on your coding agents: ships Claude Code and Codex sessions to Sentry agent tracing as gen_ai spans.",
   "keywords": [
     "agent-tracing",
