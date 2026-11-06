@@ -345,6 +345,9 @@ Docs: ${DOCS}
 `;
 
 async function main(): Promise<number> {
+  const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18))
+    throw new Error(`tattletale needs Node 22.18 or newer; this is ${process.version} (${process.execPath})`);
   const { _, flags } = parseArgs(process.argv.slice(2));
   const [cmd, ...rest] = _;
   switch (cmd) {
