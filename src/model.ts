@@ -139,6 +139,8 @@ export interface Session {
   entrypoint?: string;
   /** Session this one was forked/resumed from (its history is not re-sent). */
   parentSessionId?: string;
+  /** "owner/name" of the git repo the session ran in, when known. */
+  repo?: string;
   turns: Turn[];
   subagents: SubagentRun[];
   diagnostics: Diagnostics;

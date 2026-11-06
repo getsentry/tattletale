@@ -9,4 +9,6 @@ for c in /opt/homebrew/bin/node /usr/local/bin/node "$HOME"/.volta/bin/node "$HO
   [ -x "$c" ] && node="$c"
 done
 [ -x "$node" ] || exit 0
-exec "$node" --no-warnings "$root/src/cli.ts" "$@" || exit 0
+cli="$root/dist/cli.js"
+[ -f "$cli" ] || cli="$root/src/cli.ts"
+exec "$node" --no-warnings "$cli" "$@" || exit 0

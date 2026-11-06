@@ -26,6 +26,7 @@ import {
 } from "./state.ts";
 import type { Config } from "./state.ts";
 import { reportError } from "./report.ts";
+import { inScope, repoOf } from "./scope.ts";
 import { hashHex } from "./util.ts";
 
 export function detectAgent(path: string): AgentName {
@@ -61,8 +62,6 @@ export interface SyncReport {
   error?: string;
 }
 
-const expand = (prefix: string) => prefix.replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
-
 /** The relay sees an OTel session within seconds of its first turn; one it still hasn't seen this long after its
  *  first turn since the switch is running without telemetry (e.g. opened before the switch). */
 const OTEL_UNSEEN_MS = 10 * 60 * 1000;
@@ -89,11 +88,6 @@ export function applyOtelOwnership(session: Session, config: Config, now: number
   const firstAfterSwitch = Math.min(...session.turns.filter((t) => t.start >= since).map((t) => t.start));
   if (!Number.isFinite(firstAfterSwitch)) return "ok";
   return now - firstAfterSwitch >= OTEL_UNSEEN_MS ? "ok" : "wait";
-}
-
-function ignored(cwd: string | undefined, config: Config): boolean {
-  if (config.include.length && !(cwd && config.include.some((p) => cwd.startsWith(expand(p))))) return true;
-  return !!cwd && config.ignore.some((p) => cwd.startsWith(expand(p)));
 }
 
 /** Sends one batch; on a non-retryable rejection, bisects to isolate (and skip) the bad span. */
@@ -148,7 +142,8 @@ export async function syncTranscript(path: string, opts: SyncOptions = {}): Prom
 
   const session = parseSession(path, agent, { final: opts.final, now: opts.now });
   report.sessionId = session.sessionId;
-  if (ignored(session.cwd, config)) return { ...report, skipped: "ignored path" };
+  if (!inScope(session.cwd, config)) return { ...report, skipped: "ignored path" };
+  session.repo = repoOf(session.cwd);
   if (applyOtelOwnership(session, config, opts.now ?? Date.now(), statSync(path).mtimeMs) === "wait")
     return { ...report, skipped: "waiting for OTel relay" };
   const spans = buildSpans(session, { content: config.content, environment: config.environment, user: config.user });

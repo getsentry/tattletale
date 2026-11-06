@@ -3,6 +3,7 @@
 import { appendFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import type { OtlpSpan } from "./spans.ts";
+import { VERSION } from "./version.ts";
 
 export type SendResult =
   | { ok: true; rejected?: number; message?: string }
@@ -12,8 +13,6 @@ export interface Sink {
   name: string;
   send(spans: OtlpSpan[]): Promise<SendResult>;
 }
-
-const VERSION = "0.2.1";
 
 export function otlpPayload(spans: OtlpSpan[]): unknown {
   return {

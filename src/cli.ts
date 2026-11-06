@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --no-warnings
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listClaudeSessions } from "./claude.ts";
 import { listCodexSessions } from "./codex.ts";
@@ -183,17 +183,46 @@ function run(cmd: string, args: string[], dry: boolean): boolean {
 
 const which = (bin: string) => spawnSync("sh", ["-c", `command -v ${bin}`]).status === 0;
 
+const PLUGIN_FILES = [
+  ".claude-plugin",
+  ".codex-plugin",
+  ".agents",
+  "hooks",
+  "skills",
+  "dist",
+  "package.json",
+  "README.md",
+];
+
+/** npx/npm installs live in a disposable node_modules cache; agents get a stable copy under the tattletale home. */
+function pluginRoot(dry: boolean): string {
+  if (!ROOT.split(sep).includes("node_modules")) return ROOT;
+  const target = join(home(), "plugin");
+  if (!dry) {
+    rmSync(target, { recursive: true, force: true });
+    for (const name of PLUGIN_FILES)
+      if (existsSync(join(ROOT, name))) cpSync(join(ROOT, name), join(target, name), { recursive: true });
+  }
+  console.log(`${dry ? "would copy" : "copied"} plugin to ${target}`);
+  return target;
+}
+
 function install(flags: Record<string, unknown>): void {
   const dry = flags.print === true;
-  writeFileSync(join(home(), "node-path"), process.execPath);
+  const root = pluginRoot(dry);
+  if (!dry) {
+    mkdirSync(home(), { recursive: true });
+    // Hooks run under GUI apps whose PATH often lacks node; hooks/run.sh reads this.
+    writeFileSync(join(home(), "node-path"), process.execPath);
+  }
   const onlyClaude = flags.claude === true;
   const onlyCodex = flags.codex === true;
   if (!onlyCodex && which("claude")) {
-    run("claude", ["plugin", "marketplace", "add", ROOT], dry);
+    run("claude", ["plugin", "marketplace", "add", root], dry);
     run("claude", ["plugin", "install", `${PLUGIN}@${PLUGIN}`, "--scope", "user"], dry);
   }
   if (!onlyClaude && which("codex")) {
-    run("codex", ["plugin", "marketplace", "add", ROOT], dry);
+    run("codex", ["plugin", "marketplace", "add", root], dry);
     run("codex", ["plugin", "add", `${PLUGIN}@${PLUGIN}`], dry);
     console.log("Codex asks you to trust new hooks: open Codex and approve them under /hooks.");
   }
@@ -274,22 +303,41 @@ function verify(paths: string[], flags: Record<string, unknown>): number {
   return failed ? 1 : 0;
 }
 
-const HELP = `tattletale: ship Claude Code / Codex sessions to Sentry agent tracing
+const DOCS = "https://github.com/getsentry/tattletale#readme";
 
-  setup --dsn <dsn> [--content full|metadata] [--environment <env>] [--include <path>]... [--ignore <path>]...
-  install [--claude|--codex] [--print]     install the hooks plugin into your agents
-  uninstall [--print]
-  install --otel [--print] [--force]       Claude Code: native OpenTelemetry via the local relay instead of transcripts
-  uninstall --otel [--print]
-  relay                                    run the local OTLP relay (started automatically by hooks in otel mode)
-  status
-  sync <transcript> [--final] [--dry-run] [--sink file:<path>]
-  backfill [--days 7] [--agent claude|codex] [--dry-run] [--limit N]
-  verify [<transcript>...] [--days 30] [--agent claude|codex] [--verbose]   local token reconciliation, sends nothing
-  spans <transcript> [--final]             print the spans that would be sent
-  test-error                               send a verification error event to the DSN
-  hook [event]                             (called by agent hooks; reads JSON on stdin)
-  worker                                   (spawned by hooks)
+const HELP = `tattletale: tattles on your coding agents. It sends Claude Code and Codex sessions to Sentry agent
+tracing as gen_ai spans: conversations, model calls, tool calls, exact tokens.
+
+Get started (or ask your agent to "set up tattletale"; the plugin ships a setup skill):
+  1. tattletale setup --dsn <SENTRY_DSN>                    the only thing it needs: the Sentry project's DSN
+     optional scope: --include ~/code/terra (a folder), --repo getsentry/terra (a repo, any worktree)
+  2. tattletale install                                      hook into Claude Code and Codex
+  3. tattletale status                                       confirm; Codex then asks you to approve hooks (/hooks)
+  Check the data locally first (sends nothing): tattletale verify --days 7
+
+Setup
+  setup --dsn <dsn> [--include <path>|repo:<owner/name>]... [--repo <owner/name>]... [--ignore <rule>]...
+        [--everything] [--content full|metadata] [--environment <env>]
+                                            no --include/--repo: every session; --everything clears the scope
+  install [--claude|--codex] [--print]      install the hooks plugin into your agents (--print: show, don't run)
+  install --otel [--print] [--force]        Claude Code via its native OpenTelemetry and a local relay
+  uninstall [--otel] [--print]
+  status                                    config, what was sent, relay, recent log
+
+Data
+  verify [<transcript>...] [--days 30] [--agent claude|codex] [--verbose]   token reconciliation, sends nothing
+  backfill [--days 7] [--agent claude|codex] [--dry-run] [--limit N]        send past sessions
+  sync <transcript> [--final] [--dry-run] [--sink file:<path>]              send one session now
+  spans <transcript> [--final]              print the spans that would be sent
+  test-error                                send a test error event to the DSN
+
+Internal
+  hook [event]    called by agent hooks (JSON on stdin)
+  worker          spawned by hooks
+  relay           local OTLP relay (started by hooks when Claude Code uses OTel)
+
+State lives in ~/.tattletale (override with TATTLETALE_HOME); log: ~/.tattletale/tattletale.log
+Docs: ${DOCS}
 `;
 
 async function main(): Promise<number> {
@@ -309,9 +357,10 @@ async function main(): Promise<number> {
       if (content && content !== "full" && content !== "metadata")
         throw new Error("--content must be full or metadata");
       const ignore = list(flags.ignore);
-      const include = list(flags.include);
+      const include =
+        flags.everything === true ? [] : [...list(flags.include), ...list(flags.repo).map((r) => `repo:${r}`)];
       saveConfig({
-        ...(include.length && { include }),
+        ...((include.length || flags.everything === true) && { include }),
         ...(dsn && { dsn }),
         ...(content && { content: content as "full" | "metadata" }),
         ...(str(flags.environment) && { environment: str(flags.environment)! }),

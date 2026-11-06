@@ -1,0 +1,16 @@
+minVersion: "2.21.2"
+changelog:
+  policy: auto
+preReleaseCommand: node scripts/bump-version.mjs
+artifactProvider:
+  name: github
+  config:
+    artifacts:
+      CI:
+        - npm-package
+targets:
+  - name: npm
+    id: "@sentry/tattletale"
+    includeNames: /^sentry-tattletale-\d.*\.tgz$/
+    access: public
+  - name: github

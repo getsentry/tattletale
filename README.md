@@ -1,43 +1,79 @@
 # tattletale
 
-Tattles on your coding agents. It ships Claude Code and Codex sessions to Sentry agent tracing as
-`gen_ai` spans:
+Tattles on your coding agents. tattletale sends your Claude Code and Codex sessions to a Sentry project as
+agent traces:
 
-- one conversation per session and one trace per turn;
-- a `chat` span per model call, with exact token usage;
-- `execute_tool` spans;
-- subagents nested under the tool call that launched them.
+- one conversation per session;
+- a span per model call, with exact input, cache and output tokens;
+- tool calls, with arguments, results and sizes;
+- subagents nested under the tool call that launched them;
+- compactions.
 
-The goal is data an agent can mine for token savings.
+Then you, or an agent, can find where tokens go in Sentry's Explore → Conversations and span queries.
 
-It has no runtime dependencies and needs Node 22.18 or later, which runs the TypeScript directly.
+**All it needs is the DSN of the Sentry project to send to.** It runs on Node 22.18 or later and has no
+runtime dependencies.
 
-> Private, experimental. Will be published as `@sentry/tattletale`.
+> Private and experimental for now. It will be published as `@sentry/tattletale`. Until then, clone the repo and
+> use `node ~/code/tattletale/src/cli.ts` wherever this page says `npx @sentry/tattletale`.
 
-## Install (local)
-
-```bash
-git clone git@github.com:getsentry/tattletale.git ~/code/tattletale
-cd ~/code/tattletale
-node src/cli.ts setup --dsn <your DSN> [--include ~/code] [--content metadata]
-node src/cli.ts install          # Claude Code + Codex plugins (hooks)
-node src/cli.ts install --otel   # optional: Claude Code via native OpenTelemetry
-node src/cli.ts status
-```
-
-Codex asks you to approve the new hooks once, under `/hooks`. To check the data without sending anything:
+## Quick start
 
 ```bash
-node src/cli.ts verify --days 30
-node src/cli.ts backfill --days 7 --dry-run
+npx @sentry/tattletale setup --dsn '<SENTRY_DSN>'   # optionally scope it, see below
+npx @sentry/tattletale install                     # hook into Claude Code and Codex
+npx @sentry/tattletale status
 ```
+
+Codex asks you, once, to approve the new hooks under `/hooks`. New sessions show up in Sentry within minutes.
+
+### Or let your agent do it
+
+The plugin ships a setup skill ([skills/setup-tattletale/SKILL.md](skills/setup-tattletale/SKILL.md)). Tell
+Claude Code or Codex: _"set up tattletale, send to <DSN or Sentry project>, only for the terra repo"_. The skill
+covers getting a DSN (including through the Sentry MCP), choosing the scope, installing and verifying.
+
+## Choose which sessions are sent
+
+By default every session is sent. Narrow it with `setup`; matching uses each session's working directory.
+
+| You want                                       | Run                                    |
+| ---------------------------------------------- | -------------------------------------- |
+| Only the terra repo, in any folder or worktree | `setup --dsn … --repo getsentry/terra` |
+| Only sessions under a folder                   | `setup --dsn … --include ~/code/terra` |
+| A few repos or folders                         | repeat `--repo` / `--include`          |
+| Everything except personal stuff               | `setup --dsn … --ignore ~/personal`    |
+| Only counts and timings, no prompts or code    | add `--content metadata`               |
+| Back to everything                             | `setup --everything`                   |
+
+Rules:
+
+- **Folder rules** match that folder and everything below it; `~/code/terra` does not match `~/code/terraform`.
+- **Repo rules** (`--repo` or `--include repo:owner/name`) match on the folder's git `origin` remote, so
+  worktrees anywhere count. `--repo terra` matches any owner.
+- **Ignore rules** always win.
+
+Spans carry `vcs.repository.name`, so you can also slice by repo in Sentry.
+
+## Check before you send
+
+```bash
+npx @sentry/tattletale verify --days 7               # local token reconciliation, sends nothing
+npx @sentry/tattletale backfill --days 7 --dry-run   # what past sessions would be sent
+npx @sentry/tattletale backfill --days 7             # send them; spans are never sent twice
+```
+
+`npx @sentry/tattletale --help` lists every command.
 
 ## Development
 
 ```bash
 pnpm install
 pnpm check   # tsc (strict) + oxlint + oxfmt --check + tests
+pnpm build   # dist/ (what npm ships; Node won't strip types under node_modules)
 ```
+
+Releases go through craft. See [RELEASING.md](RELEASING.md).
 
 ## How it works
 

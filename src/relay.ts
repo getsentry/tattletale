@@ -11,6 +11,7 @@ import { gunzipSync } from "node:zlib";
 import { claudeProjectsDir } from "./claude.ts";
 import { mapClaudeOtel } from "./otel-claude.ts";
 import { reportError } from "./report.ts";
+import { inScope, repoOf } from "./scope.ts";
 import { batches, sentrySink } from "./send.ts";
 import type { Sink } from "./send.ts";
 import type { OtlpSpan } from "./spans.ts";
@@ -81,12 +82,6 @@ export function sessionInfo(sessionId: string): { cwd?: string; version?: string
   return info;
 }
 
-const expand = (p: string) => p.replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
-function allowed(cwd: string | undefined, config: Config): boolean {
-  if (config.include.length && !(cwd && config.include.some((p) => cwd.startsWith(expand(p))))) return false;
-  return !(cwd && config.ignore.some((p) => cwd.startsWith(expand(p))));
-}
-
 export function createRelay(opts: RelayOptions = {}): Relay {
   const now = opts.now ?? Date.now;
   const rootQuietMs = opts.rootQuietMs ?? 5_000;
@@ -135,7 +130,7 @@ export function createRelay(opts: RelayOptions = {}): Relay {
       const ready = force || (b.hasRoot && quiet >= rootQuietMs) || quiet >= quietMs || t - b.firstAt >= maxAgeMs;
       if (!ready) continue;
       const info = b.sessionId ? sessionInfo(b.sessionId) : {};
-      if (config.disabled || !allowed(info.cwd, config)) {
+      if (config.disabled || !inScope(info.cwd, config)) {
         buckets.delete(traceId);
         report.skipped += b.spans.length;
         continue;
@@ -161,6 +156,7 @@ export function createRelay(opts: RelayOptions = {}): Relay {
         { key: "agent.name", value: { stringValue: "claude-code" } },
         { key: "agent.source", value: { stringValue: "otel" } },
         ...(info.cwd ? [{ key: "agent.session.cwd", value: { stringValue: info.cwd } }] : []),
+        ...(repoOf(info.cwd) ? [{ key: "vcs.repository.name", value: { stringValue: repoOf(info.cwd)! } }] : []),
         ...(info.version ? [{ key: "sentry.release", value: { stringValue: `claude-code@${info.version}` } }] : []),
         ...(config.user ? [{ key: "user.id", value: { stringValue: config.user } }] : []),
       ];

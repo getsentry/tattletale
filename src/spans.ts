@@ -177,6 +177,7 @@ export function buildSpans(session: Session, opts: SpanOptions): OtlpSpan[] {
     "agent.session.cwd": session.cwd,
     "agent.session.entrypoint": session.entrypoint,
     "vcs.ref.head.name": session.gitBranch,
+    "vcs.repository.name": session.repo,
     "user.id": opts.user,
   };
   const spans: OtlpSpan[] = [];

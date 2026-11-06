@@ -1,12 +1,37 @@
 {
   "name": "@sentry/tattletale",
-  "version": "0.2.1",
-  "private": true,
+  "version": "0.2.2",
   "description": "Tattles on your coding agents: ships Claude Code and Codex sessions to Sentry agent tracing as gen_ai spans.",
-  "bin": {
-    "tattletale": "src/cli.ts"
+  "keywords": [
+    "agent-tracing",
+    "claude-code",
+    "codex",
+    "gen_ai",
+    "opentelemetry",
+    "sentry"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getsentry/tattletale.git"
   },
+  "bin": {
+    "tattletale": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "skills",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".agents",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --no-warnings --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
@@ -14,7 +39,9 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
-    "verify:local": "node --no-warnings src/cli.ts verify --days 30"
+    "verify:local": "node --no-warnings src/cli.ts verify --days 30",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

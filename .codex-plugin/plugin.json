@@ -1,5 +1,6 @@
 {
   "name": "tattletale",
   "description": "Ship Codex sessions to Sentry agent tracing (gen_ai spans): conversations, model calls, tools, tokens.",
-  "hooks": "./hooks/hooks.json"
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/"
 }
