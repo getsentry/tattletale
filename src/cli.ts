@@ -447,10 +447,9 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    console.error(err instanceof Error ? err.message : err);
-    process.exit(1);
-  },
-);
+// Exit explicitly (idle keep-alive sockets would hold the process open), but only once piped stdout drains.
+const exit = (code: number) => process.stdout.write("", () => process.exit(code));
+main().then(exit, (err) => {
+  console.error(err instanceof Error ? err.message : err);
+  exit(1);
+});
