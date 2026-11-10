@@ -7,7 +7,24 @@ import { VERSION } from "./version.ts";
 
 export type SendResult =
   | { ok: true; rejected?: number; message?: string }
-  | { ok: false; retryable: boolean; status?: number; message: string };
+  | {
+      ok: false;
+      retryable: boolean;
+      /** No answer came back and the request may have arrived: sending it again could count it twice. */
+      maybeDelivered?: boolean;
+      status?: number;
+      message: string;
+    };
+
+/** Failures before a request can reach Sentry: no address, no route, nothing listening, no TLS session. */
+const NEVER_LEFT =
+  /^(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EHOSTDOWN|ENETDOWN|EADDRNOTAVAIL|UND_ERR_CONNECT_TIMEOUT)$|CERT|SSL|TLS/;
+
+function neverLeft(err: unknown): boolean {
+  const cause = (err as { cause?: { code?: string; errors?: { code?: string }[] } })?.cause;
+  const codes = cause?.errors?.length ? cause.errors.map((e) => e.code) : [cause?.code];
+  return codes.every((code) => code !== undefined && NEVER_LEFT.test(code));
+}
 
 export interface Sink {
   name: string;
@@ -51,7 +68,11 @@ export function sentrySink(dsn: string, fetchImpl: typeof fetch = fetch): Sink {
           signal: AbortSignal.timeout(30_000),
         });
       } catch (err) {
-        return { ok: false, retryable: true, message: String(err) };
+        // Sentry only folds a repeated span into the first for a short while (seconds, not minutes), so a
+        // request that may have arrived must not be sent again later.
+        const code = (err as { cause?: { code?: string } })?.cause?.code;
+        const message = `${err}${code ? ` (${code})` : ""}`;
+        return { ok: false, retryable: true, maybeDelivered: !neverLeft(err), message };
       }
       const text = await res.text().catch(() => "");
       if (res.ok) {

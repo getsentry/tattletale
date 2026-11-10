@@ -17,6 +17,7 @@ import {
   loadSent,
   log,
   markSent,
+  markUnverified,
   queueLength,
   recoverPending,
   takeJobs,
@@ -99,6 +100,8 @@ async function sendBatch(sink: Sink, key: string, batch: OtlpSpan[], report: Syn
   const res = await sink.send(batch);
   // The ledger first: a crash between the two lines must not leave sent spans unrecorded.
   if (res.ok) markSent(ids);
+  // No answer, and Sentry may have the batch: the same at-most-once rule as a crash mid-send.
+  else if (res.maybeDelivered) markUnverified(ids);
   clearPending(key);
   if (res.ok) {
     report.sent += ids.length;
@@ -112,7 +115,11 @@ async function sendBatch(sink: Sink, key: string, batch: OtlpSpan[], report: Syn
     report.failed += ids.length;
     report.error = res.message;
     report.stop = true;
-    log(`${key}: send failed (will retry): ${res.message}`);
+    log(
+      res.maybeDelivered
+        ? `${key}: no answer from Sentry; ${ids.length} spans may have arrived and won't be sent again: ${res.message}`
+        : `${key}: send failed (will retry): ${res.message}`,
+    );
     return false;
   }
   if (batch.length > 1) {
