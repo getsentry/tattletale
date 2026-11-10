@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Don't re-send a batch Sentry may already have by @gricha in [aabe0bbc](https://github.com/getsentry/tattletale/commit/aabe0bbc9c20d819dc5d07d8303eb196700d194e)
+
 ## 0.3.2
 
 - Make sending safe across processes, and retry what failed by @gricha in [086bee4c](https://github.com/getsentry/tattletale/commit/086bee4ccebb58d982c18cbc419bf44108f39019)
