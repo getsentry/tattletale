@@ -100,6 +100,31 @@ test("relay: holds a trace until it is quiet, maps it with its logs, never re-se
   assert.equal((await relay.flush()).sent, 0, "ledger stops duplicates");
 });
 
+test("relay: a failed send is retried only if Sentry can't have received it", async () => {
+  const { dir } = setup();
+  writeJsonl(join(dir, "sess-1.jsonl"), [cc.prompt("sess-1", "u1", 0, "hi")]);
+  let t = T0 + 1000;
+  const sink = memorySink();
+  const relay = createRelay({ sink, config: loadConfig(), now: () => t });
+  relay.receive("/v1/traces", traces());
+  t += 6000;
+  sink.fail = { ok: false, retryable: true, maybeDelivered: false, message: "offline" };
+  assert.equal((await relay.flush()).failed, 2);
+  sink.fail = undefined;
+  assert.equal((await relay.flush()).sent, 2, "it never left: sent on the next try");
+
+  relay.receive("/v1/traces", {
+    resourceSpans: [{ scopeSpans: [{ spans: [span("root2", "", "claude_code.interaction", T0 + 9000, {})] }] }],
+  });
+  t += 20_000;
+  sink.fail = { ok: false, retryable: true, maybeDelivered: true, message: "timeout" };
+  assert.equal((await relay.flush()).failed, 1);
+  sink.fail = undefined;
+  assert.equal((await relay.flush()).sent, 0, "it may have arrived: not sent again");
+  assert.equal(sink.batches.flat().length, 2);
+  assert.equal(relay.pending(), 0);
+});
+
 test("relay: include/ignore apply to OTel too", async () => {
   const { dir } = setup();
   writeJsonl(join(dir, "sess-1.jsonl"), [cc.prompt("sess-1", "u1", 0, "hi")]);

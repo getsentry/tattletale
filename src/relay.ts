@@ -15,7 +15,7 @@ import { inScope, repoOf } from "./scope.ts";
 import { batches, sentrySink } from "./send.ts";
 import type { Sink } from "./send.ts";
 import type { OtlpSpan } from "./spans.ts";
-import { loadConfig, loadOtelSessions, loadSent, log, markOtelSession, markSent } from "./state.ts";
+import { loadConfig, loadOtelSessions, loadSent, log, markOtelSession, markSent, markUnverified } from "./state.ts";
 import type { Config } from "./state.ts";
 import { readHead } from "./util.ts";
 
@@ -177,6 +177,8 @@ export function createRelay(opts: RelayOptions = {}): Relay {
         } else {
           ok = false;
           report.failed += batch.length;
+          // No answer, and Sentry may have the batch: never send it again (the rule transcript sync follows).
+          if (res.maybeDelivered) markUnverified(batch.map((s) => s.spanId));
           log(`relay: send failed for trace ${traceId}: ${res.message}`);
           break;
         }
