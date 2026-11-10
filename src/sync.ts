@@ -1,6 +1,6 @@
 // Parse a transcript, build spans, send only what the ledger hasn't seen. Safe to run any number of times.
 
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { listClaudeSessions, parseClaude } from "./claude.ts";
 import { listCodexSessions, parseCodex } from "./codex.ts";
@@ -27,7 +27,7 @@ import {
 import type { Config } from "./state.ts";
 import { reportError } from "./report.ts";
 import { inScope, repoOf } from "./scope.ts";
-import { hashHex } from "./util.ts";
+import { VERSION } from "./version.ts";
 
 export function detectAgent(path: string): AgentName {
   return /(^|\/)\.codex\/|rollout-[^/]*\.jsonl/.test(path) ? "codex" : "claude-code";
@@ -60,6 +60,8 @@ export interface SyncReport {
   settled: boolean;
   skipped?: string;
   error?: string;
+  /** Sentry can't be reached or refuses us (network, outage, bad DSN): other sessions would fail the same way. */
+  stop?: boolean;
 }
 
 /** The relay sees an OTel session within seconds of its first turn; one it still hasn't seen this long after its
@@ -95,9 +97,10 @@ async function sendBatch(sink: Sink, key: string, batch: OtlpSpan[], report: Syn
   const ids = batch.map((s) => s.spanId);
   writePending(key, ids);
   const res = await sink.send(batch);
+  // The ledger first: a crash between the two lines must not leave sent spans unrecorded.
+  if (res.ok) markSent(ids);
   clearPending(key);
   if (res.ok) {
-    markSent(ids);
     report.sent += ids.length;
     if (res.rejected) {
       report.rejected += res.rejected;
@@ -108,6 +111,7 @@ async function sendBatch(sink: Sink, key: string, batch: OtlpSpan[], report: Syn
   if (res.retryable) {
     report.failed += ids.length;
     report.error = res.message;
+    report.stop = true;
     log(`${key}: send failed (will retry): ${res.message}`);
     return false;
   }
@@ -139,6 +143,9 @@ export async function syncTranscript(path: string, opts: SyncOptions = {}): Prom
   };
   if (config.disabled) return { ...report, skipped: "disabled" };
   if (!existsSync(path)) return { ...report, skipped: "missing" };
+  const sink = opts.sink ?? (config.dsn ? sentrySink(config.dsn) : undefined);
+  if (!sink && !opts.dryRun)
+    return { ...report, error: "no DSN configured (run: tattletale setup --dsn ...)", stop: true };
 
   const session = parseSession(path, agent, { final: opts.final, now: opts.now });
   report.sessionId = session.sessionId;
@@ -150,12 +157,11 @@ export async function syncTranscript(path: string, opts: SyncOptions = {}): Prom
   report.built = spans.length;
   const complete = session.turns.every((t) => t.complete) && session.subagents.every((s) => s.complete);
 
-  const sink = opts.sink ?? (config.dsn ? sentrySink(config.dsn) : undefined);
-  if (!sink && !opts.dryRun) return { ...report, error: "no DSN configured (run: tattletale setup --dsn ...)" };
-
+  // One sender at a time on this machine: the ledger is read and extended under this lock, so two
+  // processes (the hook worker and a manual replay, say) can never both decide to send the same span.
   const key = `${agent}:${session.sessionId}`;
-  const done = await withLock(`session-${hashHex(16, key)}`, async () => {
-    recoverPending(key);
+  const done = await withLock("send", async () => {
+    if (!opts.dryRun) recoverPending();
     const sent = loadSent();
     const todo = spans.filter((s) => !sent.has(s.spanId));
     report.alreadySent = spans.length - todo.length;
@@ -168,7 +174,7 @@ export async function syncTranscript(path: string, opts: SyncOptions = {}): Prom
     }
     return true;
   });
-  if (!done) return { ...report, error: "session locked by another process" };
+  if (!done) return { ...report, error: "another tattletale process is sending; will retry" };
   report.settled = complete && report.failed === 0 && !opts.dryRun;
   return report;
 }
@@ -178,6 +184,8 @@ export async function syncTranscript(path: string, opts: SyncOptions = {}): Prom
 interface FileMark {
   mtimeMs: number;
   settled: boolean;
+  /** The tattletale version that crashed on this transcript. */
+  crashed?: string;
 }
 
 function loadMarks(): Record<string, FileMark> {
@@ -188,24 +196,53 @@ function loadMarks(): Record<string, FileMark> {
   }
 }
 
-function saveMarks(marks: Record<string, FileMark>): void {
-  try {
-    writeFileSync(join(home(), "files.json"), JSON.stringify(marks));
-  } catch {}
+/** Changes marks under a lock, re-reading the file first: the worker and a manual replay both write it. */
+async function updateMarks(change: (marks: Record<string, FileMark>) => void): Promise<void> {
+  await withLock(
+    "marks",
+    async () => {
+      const marks = loadMarks();
+      change(marks);
+      const path = join(home(), "files.json");
+      writeFileSync(`${path}.${process.pid}.tmp`, JSON.stringify(marks));
+      renameSync(`${path}.${process.pid}.tmp`, path);
+    },
+    5_000,
+  ).catch(() => {});
 }
 
 const FINAL_EVENTS = new Set(["Stop", "SessionEnd", "stop", "sessionEnd"]);
 
-/** Recently modified transcripts that are not yet settled. Catches sessions whose hooks never fired. */
+/**
+ * Transcripts that may still have something to send. Recent ones that are new or changed (sessions whose
+ * hooks never fired), and every one not settled however old: nothing else retries a send that failed.
+ */
 export function sweepCandidates(days: number, marks: Record<string, FileMark>): { path: string; agent: AgentName }[] {
   const since = Date.now() - days * 86_400_000;
-  const out: { path: string; agent: AgentName }[] = [];
-  for (const path of listClaudeSessions(since)) out.push({ path, agent: "claude-code" });
-  for (const path of listCodexSessions(since)) out.push({ path, agent: "codex" });
-  return out.filter(({ path }) => {
-    const mark = marks[path];
-    return !mark || !mark.settled || mark.mtimeMs !== statSync(path).mtimeMs;
-  });
+  const paths = new Set([...listClaudeSessions(since), ...listCodexSessions(since)]);
+  for (const [path, mark] of Object.entries(marks)) if (!mark.settled && existsSync(path)) paths.add(path);
+  return [...paths]
+    .filter((path) => {
+      const mark = marks[path];
+      if (!mark) return true;
+      const changed = mark.mtimeMs !== statSync(path).mtimeMs;
+      // One that crashed us is left alone until it changes or tattletale is upgraded, not retried every sweep.
+      if (mark.crashed) return changed || mark.crashed !== VERSION;
+      return !mark.settled || changed;
+    })
+    .map((path) => ({ path, agent: detectAgent(path) }));
+}
+
+const SWEEP_EVERY_MS = 5 * 60 * 1000;
+
+/** True at most once per interval, across processes: sweeps ride on hook events without running on each. */
+function sweepDue(): boolean {
+  const stamp = join(home(), "last-sweep");
+  try {
+    if (Date.now() - statSync(stamp).mtimeMs < SWEEP_EVERY_MS) return false;
+  } catch {}
+  writeFileSync(stamp, "");
+  return true;
 }
 
 export async function syncMany(
@@ -213,50 +250,49 @@ export async function syncMany(
   opts: SyncOptions = {},
   onReport?: (r: SyncReport) => void,
 ): Promise<SyncReport[]> {
-  const marks = loadMarks();
   const reports: SyncReport[] = [];
+  const blank = (item: { path: string; agent?: AgentName }, extra: Partial<SyncReport>): SyncReport => ({
+    path: item.path,
+    agent: item.agent ?? detectAgent(item.path),
+    built: 0,
+    alreadySent: 0,
+    sent: 0,
+    failed: 0,
+    poisoned: 0,
+    rejected: 0,
+    settled: false,
+    ...extra,
+  });
+  let stopped = false;
   for (const item of items) {
     let report: SyncReport;
     if (!existsSync(item.path)) {
       // SessionStart fires before the agent has written its transcript.
-      reports.push({
-        path: item.path,
-        agent: item.agent ?? detectAgent(item.path),
-        built: 0,
-        alreadySent: 0,
-        sent: 0,
-        failed: 0,
-        poisoned: 0,
-        rejected: 0,
-        settled: false,
-        skipped: "missing",
-      });
+      reports.push(blank(item, { skipped: "missing" }));
       continue;
     }
+    let mtimeMs = 0;
     try {
-      const mtimeMs = statSync(item.path).mtimeMs;
-      report = await syncTranscript(item.path, { ...opts, agent: item.agent, final: item.final });
+      mtimeMs = statSync(item.path).mtimeMs;
+      if (stopped) {
+        // Sentry can't be reached: leave the rest unsettled for the next sweep rather than fail one by one.
+        report = blank(item, { skipped: "not tried, will retry" });
+      } else {
+        report = await syncTranscript(item.path, { ...opts, agent: item.agent, final: item.final });
+        stopped = report.stop === true;
+      }
       // Intentionally skipped sessions count as settled until the file changes, so sweeps don't re-parse them.
-      if (!opts.dryRun) marks[item.path] = { mtimeMs, settled: report.settled || report.skipped === "ignored path" };
+      const settled = report.settled || report.skipped === "ignored path";
+      if (!opts.dryRun) await updateMarks((marks) => void (marks[item.path] = { mtimeMs, settled }));
     } catch (err) {
-      report = {
-        path: item.path,
-        agent: item.agent ?? detectAgent(item.path),
-        built: 0,
-        alreadySent: 0,
-        sent: 0,
-        failed: 0,
-        poisoned: 0,
-        rejected: 0,
-        settled: false,
-        error: String((err as Error)?.stack ?? err),
-      };
+      report = blank(item, { error: String((err as Error)?.stack ?? err) });
       log(`sync ${item.path} crashed: ${report.error}`);
+      if (!opts.dryRun)
+        await updateMarks((marks) => void (marks[item.path] = { mtimeMs, settled: false, crashed: VERSION }));
       await reportError(err, { stage: "sync", agent: report.agent });
     }
     reports.push(report);
     onReport?.(report);
-    if (!opts.dryRun) saveMarks(marks);
   }
   return reports;
 }
@@ -288,7 +324,11 @@ export async function runWorker(sweepDays = 2): Promise<void> {
           log(
             `sync ${r.agent} ${r.sessionId ?? r.path}: built=${r.built} sent=${r.sent} already=${r.alreadySent} failed=${r.failed}${r.skipped ? ` skipped=${r.skipped}` : ""}${r.error ? ` error=${r.error}` : ""}`,
           );
-        if (sweep) {
+        const due = sweepDue();
+        if (sweep || due) {
+          await updateMarks((marks) => {
+            for (const path of Object.keys(marks)) if (!existsSync(path)) delete marks[path];
+          });
           const candidates = sweepCandidates(sweepDays, loadMarks()).filter((c) => !byPath.has(c.path));
           const swept = await syncMany(candidates);
           const sent = swept.reduce((n, r) => n + r.sent, 0);

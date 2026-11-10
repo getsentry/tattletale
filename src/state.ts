@@ -3,20 +3,27 @@
 //   sent.log       every span ID Sentry accepted, one per line (the dedup ledger)
 //   pending/       span IDs of a batch in flight; survives a crash between send and ledger write
 //   unverified.log span IDs from batches whose outcome is unknown after a crash (never re-sent)
-//   queue/         jobs written by hooks, drained by the background worker
-//   locks/         per-session and worker locks
+//   queue/         wake-up jobs written by hooks, drained by the background worker
+//   locks/         the send lock (one sender at a time) and the worker lock
+//   files.json     per-transcript marks: which ones are fully sent
 //   tattletale.log
 
+import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
   existsSync,
+  fstatSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -100,15 +107,47 @@ export function log(message: string): void {
 // ---- dedup ledger ----
 
 let sentCache: Set<string> | undefined;
+/** How far each ledger file has been read, by path. */
+const ledgerRead = new Map<string, number>();
 
 function readIds(path: string): string[] {
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8").split("\n").filter(Boolean);
 }
 
+/** Adds the IDs appended to a ledger file since the last call. */
+function readNewIds(name: string, into: Set<string>): void {
+  const path = join(home(), name);
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    let from = ledgerRead.get(path) ?? 0;
+    if (size < from) from = 0;
+    if (size === from) return;
+    const buf = Buffer.alloc(size - from);
+    const text = buf.subarray(0, readSync(fd, buf, 0, buf.length, from)).toString("latin1");
+    // Stop at the last complete line: another process may be in the middle of appending.
+    const end = text.lastIndexOf("\n") + 1;
+    for (const id of text.slice(0, end).split("\n")) if (id) into.add(id);
+    ledgerRead.set(path, from + end);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Every span ID already sent. Other processes append to the ledger too (a manual replay next to the hook
+ * worker), so each call picks up what they added: check it while holding the send lock.
+ */
 export function loadSent(): Set<string> {
-  if (!sentCache)
-    sentCache = new Set([...readIds(join(home(), "sent.log")), ...readIds(join(home(), "unverified.log"))]);
+  sentCache ??= new Set();
+  readNewIds("sent.log", sentCache);
+  readNewIds("unverified.log", sentCache);
   return sentCache;
 }
 
@@ -120,8 +159,18 @@ export function markSent(ids: string[]): void {
   for (const id of ids) set.add(id);
 }
 
+/** Records IDs whose delivery is unknown: they are never sent again, so they can be lost but not doubled. */
+export function markUnverified(ids: string[]): void {
+  if (!ids.length) return;
+  ensureDir(home());
+  appendFileSync(join(home(), "unverified.log"), ids.join("\n") + "\n");
+  const set = loadSent();
+  for (const id of ids) set.add(id);
+}
+
 export function resetSentCache(): void {
   sentCache = undefined;
+  ledgerRead.clear();
 }
 
 const pendingPath = (key: string) => join(ensureDir(join(home(), "pending")), `${hashHex(16, key)}.json`);
@@ -135,59 +184,100 @@ export function clearPending(key: string): void {
 }
 
 /**
- * A pending file means we crashed after sending a batch but before recording the result. Sentry may or
- * may not have it. We choose at-most-once: record those IDs as unverified and never re-send them, so a
- * crash can lose a batch but can never double count tokens.
+ * A pending file means a process died after sending a batch but before recording the result. Sentry may
+ * or may not have it. We choose at-most-once: record those IDs as unverified and never re-send them, so
+ * a crash can lose a batch but can never double count tokens. Call while holding the send lock: then no
+ * batch is in flight, and every pending file is a leftover.
  */
-export function recoverPending(key: string): number {
-  const path = pendingPath(key);
-  if (!existsSync(path)) return 0;
-  let ids: string[] = [];
-  try {
-    ids = JSON.parse(readFileSync(path, "utf8")).ids ?? [];
-  } catch {}
-  if (ids.length) {
-    appendFileSync(join(home(), "unverified.log"), ids.join("\n") + "\n");
-    const set = loadSent();
-    for (const id of ids) set.add(id);
-    log(`recovered pending batch for ${key}: ${ids.length} spans marked unverified`);
+export function recoverPending(): number {
+  const dir = join(home(), "pending");
+  if (!existsSync(dir)) return 0;
+  let recovered = 0;
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    let batch: { key?: string; ids?: string[] } = {};
+    try {
+      batch = JSON.parse(readFileSync(path, "utf8"));
+    } catch {}
+    const ids = batch.ids ?? [];
+    markUnverified(ids);
+    if (ids.length) log(`recovered pending batch for ${batch.key}: ${ids.length} spans marked unverified`);
+    rmSync(path, { force: true });
+    recovered += ids.length;
   }
-  rmSync(path, { force: true });
-  return ids.length;
+  return recovered;
 }
 
 // ---- locks ----
 
-const STALE_LOCK_MS = 10 * 60 * 1000;
+export const STALE_LOCK_MS = 10 * 60 * 1000;
+const LOCK_HEARTBEAT_MS = 60 * 1000;
 
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "EPERM";
   }
 }
 
+function readLock(path: string): { token: string; mtimeMs: number } | undefined {
+  try {
+    return { token: readFileSync(path, "utf8"), mtimeMs: statSync(path).mtimeMs };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A lock file holds "<pid> <random>", and its holder touches it every minute. It is stale when the
+ * holder's process is gone, or when nobody touched it for 10 minutes (a reused PID, a hung holder).
+ * Returns the release function, which only removes the lock if this process still holds it.
+ */
 export function tryLock(name: string): (() => void) | undefined {
   const path = join(ensureDir(join(home(), "locks")), `${name}.lock`);
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const nonce = randomBytes(8).toString("hex");
+  const token = `${process.pid} ${nonce}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fd = openSync(path, "wx");
-      writeSync(fd, String(process.pid));
+      writeSync(fd, token);
       closeSync(fd);
-      return () => rmSync(path, { force: true });
     } catch {
-      let stale = false;
+      const seen = readLock(path);
+      if (!seen) continue;
+      // An empty file is a holder between creating the lock and writing its token.
+      const dead = seen.token !== "" && !pidAlive(Number(seen.token.split(" ")[0]));
+      if (!dead && Date.now() - seen.mtimeMs <= STALE_LOCK_MS) return undefined;
+      // Move the stale file aside rather than delete it: only one process can, and it can tell whether
+      // it moved the file it judged or a fresh lock someone took in between (then it puts that back).
+      const aside = `${path}.${nonce}.stale`;
       try {
-        const pid = Number(readFileSync(path, "utf8"));
-        stale = !pidAlive(pid) || Date.now() - statSync(path).mtimeMs > STALE_LOCK_MS;
+        renameSync(path, aside);
       } catch {
-        stale = true;
+        continue;
       }
-      if (!stale) return undefined;
-      rmSync(path, { force: true });
+      if (readLock(aside)?.token !== seen.token) {
+        try {
+          linkSync(aside, path);
+        } catch {}
+      }
+      rmSync(aside, { force: true });
+      continue;
     }
+    const owns = () => readLock(path)?.token === token;
+    const beat = setInterval(() => {
+      try {
+        const now = new Date();
+        if (owns()) utimesSync(path, now, now);
+      } catch {}
+    }, LOCK_HEARTBEAT_MS);
+    beat.unref();
+    return () => {
+      clearInterval(beat);
+      if (owns()) rmSync(path, { force: true });
+    };
   }
   return undefined;
 }
@@ -217,20 +307,31 @@ export interface Job {
   at: number;
 }
 
+/**
+ * The queue is a wake-up signal, not a work log: a job only says "look at this transcript now". Jobs are
+ * removed before they are worked on, so one that crashes the worker is not retried in a loop. What a
+ * lost job would have sent is found by the sweep, which goes by the transcripts and the ledger.
+ */
 export function enqueue(job: Job): void {
   const dir = ensureDir(join(home(), "queue"));
-  writeFileSync(
-    join(dir, `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`),
-    JSON.stringify(job),
-  );
+  const name = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  // Written under a name the worker skips, then renamed, so the worker never reads half a job.
+  writeFileSync(join(dir, `${name}.tmp`), JSON.stringify(job));
+  renameSync(join(dir, `${name}.tmp`), join(dir, `${name}.json`));
+}
+
+function jobFiles(): string[] {
+  const dir = join(home(), "queue");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((n) => n.endsWith(".json"))
+    .toSorted()
+    .map((n) => join(dir, n));
 }
 
 export function takeJobs(): Job[] {
-  const dir = join(home(), "queue");
-  if (!existsSync(dir)) return [];
   const jobs: Job[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
-    const path = join(dir, name);
+  for (const path of jobFiles()) {
     try {
       jobs.push(JSON.parse(readFileSync(path, "utf8")));
     } catch {}
@@ -240,8 +341,7 @@ export function takeJobs(): Job[] {
 }
 
 export function queueLength(): number {
-  const dir = join(home(), "queue");
-  return existsSync(dir) ? readdirSync(dir).length : 0;
+  return jobFiles().length;
 }
 
 export function countLines(name: string): number {

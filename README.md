@@ -97,12 +97,21 @@ Releases go through craft. See [RELEASING.md](RELEASING.md).
 ```
 agent hook (SessionStart / Stop / SubagentStop / SessionEnd, async)
   └─ hooks/run.sh → cli.ts hook    queue a job, spawn a detached worker, exit 0 (never blocks the agent)
-       worker: lock session → parse whole transcript → build spans with deterministic IDs
+       worker: parse whole transcript → build spans with deterministic IDs → take the send lock
                → drop IDs already in ~/.tattletale/sent.log → send new ones (OTLP/HTTP JSON) → append to ledger
 ```
 
-`SessionStart` also sweeps recently modified transcripts that aren't settled yet, catching sessions whose
-hooks never fired.
+The queue is only a wake-up signal: the transcripts and the ledger are the state, so a lost job loses
+nothing. On a hook, at most every 5 minutes, the worker also sweeps:
+
+- recently modified transcripts that aren't settled yet, which catches sessions whose hooks never fired;
+- any transcript with spans still unsent, however old, which retries sends that failed.
+
+A transcript that crashes tattletale is reported as an error and left alone until it changes or tattletale is
+upgraded.
+
+Only one process sends at a time on a machine (hook workers, `replay`, `sync`). Each re-reads the ledger
+under that lock, so two of them never send the same span.
 
 The tool's own failures (a parser crashing on a new transcript format, a hook failing) are sent to the
 same DSN as Sentry error events. Format drift shows up as an issue instead of a silent gap in the data.
@@ -151,14 +160,15 @@ twice:
 
 ## Guarantees and how they're checked
 
-| Guarantee                                | Mechanism                                                                                                                                                                             | Check                                                                                                          |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Each API response counted once           | Claude: dedup by `message.id` (one response spans several lines). Codex: `token_usage_record` per response, else deltas of the cumulative `token_count` (repeats ignored)             | `verify`: parser vs a naive count over the raw files, on every local session                                   |
-| Resumed/forked history not re-sent       | Claude copies keep the parent's `sessionId` and are skipped. Fork subagents' copies are claimed by the first file. Codex: everything before the first own `task_started` is inherited | tests; `verify` session-wide union check                                                                       |
-| Copies with rewritten IDs not re-sent    | Span IDs come only from globally unique call/tool/prompt IDs, so the ledger dedups across sessions                                                                                    | test `rewritten copy`                                                                                          |
-| Tokens match Sentry's convention         | `input` includes cache reads and writes (Anthropic's doesn't). Claude cache writes split 5m/1h. Claude thinking tokens and Codex reasoning tokens reported separately                 | `verify`: chat-span sums = parser; E2E: Sentry aggregates = transcript = Claude's own cost-state, to the token |
-| Never double sent after a crash          | The batch in flight is written to `pending/`; on recovery its IDs are marked unverified and never re-sent (at-most-once)                                                              | test `crash between send and ledger write`                                                                     |
-| Failures don't lose data or loop forever | Retryable errors leave the ledger untouched. A span Sentry permanently rejects is isolated by bisecting and skipped                                                                   | tests                                                                                                          |
+| Guarantee                                | Mechanism                                                                                                                                                                                                                                                                | Check                                                                                                          |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Each API response counted once           | Claude: dedup by `message.id` (one response spans several lines). Codex: `token_usage_record` per response, else deltas of the cumulative `token_count` (repeats ignored)                                                                                                | `verify`: parser vs a naive count over the raw files, on every local session                                   |
+| Resumed/forked history not re-sent       | Claude copies keep the parent's `sessionId` and are skipped. Fork subagents' copies are claimed by the first file. Codex: everything before the first own `task_started` is inherited                                                                                    | tests; `verify` session-wide union check                                                                       |
+| Copies with rewritten IDs not re-sent    | Span IDs come only from globally unique call/tool/prompt IDs, so the ledger dedups across sessions                                                                                                                                                                       | test `rewritten copy`                                                                                          |
+| Tokens match Sentry's convention         | `input` includes cache reads and writes (Anthropic's doesn't). Claude cache writes split 5m/1h. Claude thinking tokens and Codex reasoning tokens reported separately                                                                                                    | `verify`: chat-span sums = parser; E2E: Sentry aggregates = transcript = Claude's own cost-state, to the token |
+| Never double sent after a crash          | The batch in flight is written to `pending/`; on recovery its IDs are marked unverified and never re-sent (at-most-once)                                                                                                                                                 | test `crash between send and ledger write`                                                                     |
+| Never double sent by two processes       | One send lock per machine; the ledger is re-read under it, so a `replay` next to the hook worker can't re-send what the other sent                                                                                                                                       | test `two processes`                                                                                           |
+| Failures don't lose data or loop forever | A failed send (network, outage, rate limit, refused DSN) leaves the ledger untouched and the session unsettled; the sweep retries it on a later hook, however old it is by then. Only a payload Sentry rejects (400, 413, 422) is bisected, and the one bad span skipped | tests                                                                                                          |
 
 Results on this machine: `verify` passes on all 1,124 local sessions (Claude and Codex, Apr–Nov 2026).
 The E2E run against Sentry matched to the token.

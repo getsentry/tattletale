@@ -269,7 +269,7 @@ test("crash between send and ledger write: at-most-once, never a duplicate", asy
   const sentIds = sent(sink).map((s) => s.spanId);
   assert.ok(!sentIds.includes(ids[0]!) && !sentIds.includes(ids[1]!), "possibly-delivered spans are not re-sent");
   assert.equal(sentIds.length, ids.length - 2);
-  assert.equal(recoverPending(`claude-code:${S}`), 0, "pending batch was consumed");
+  assert.equal(recoverPending(), 0, "pending batch was consumed");
 });
 
 test("retryable failure: nothing is marked sent, next sync delivers everything", async () => {
