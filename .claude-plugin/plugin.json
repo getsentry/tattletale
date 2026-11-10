@@ -1,5 +1,5 @@
 {
   "name": "tattletale",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Ship Claude Code sessions to Sentry agent tracing (gen_ai spans): conversations, model calls, tools, tokens."
 }
