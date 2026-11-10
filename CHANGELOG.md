@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4
+
+- Relay: don't re-send a batch Sentry may already have by @gricha in [a71cbc39](https://github.com/getsentry/tattletale/commit/a71cbc3900aa5d9891b16792dfa83894c1373b08)
+
 ## 0.3.3
 
 - Don't re-send a batch Sentry may already have by @gricha in [aabe0bbc](https://github.com/getsentry/tattletale/commit/aabe0bbc9c20d819dc5d07d8303eb196700d194e)
