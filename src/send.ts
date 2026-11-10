@@ -61,7 +61,9 @@ export function sentrySink(dsn: string, fetchImpl: typeof fetch = fetch): Sink {
         } catch {}
         return { ok: true, rejected, message: text.slice(0, 500) || undefined };
       }
-      const retryable = res.status === 429 || res.status >= 500;
+      // Only these mean "this payload is bad", which bisecting can isolate. Anything else (a wrong or
+      // disabled DSN, rate limits, an outage) says nothing about the spans: keep them and try again later.
+      const retryable = ![400, 413, 422].includes(res.status);
       return { ok: false, retryable, status: res.status, message: `${res.status} ${text.slice(0, 500)}` };
     },
   };
