@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Make sending safe across processes, and retry what failed by @gricha in [086bee4c](https://github.com/getsentry/tattletale/commit/086bee4ccebb58d982c18cbc419bf44108f39019)
+- Don't write spans off as sent when Sentry refuses the DSN by @gricha in [87b29022](https://github.com/getsentry/tattletale/commit/87b29022669722d0100b39a37ed91f3802866ebe)
+
 ## 0.3.1
 
 - Hooks pick a node new enough to run tattletale by @gricha in [8b35c71e](https://github.com/getsentry/tattletale/commit/8b35c71ed9c7c8765987191373c6f7fae5755c14)
