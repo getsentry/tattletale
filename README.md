@@ -3,7 +3,7 @@
 Paste this to your coding agent:
 
 ```text
-Set up https://github.com/getsentry/tattletale to send my coding-agent sessions to Sentry project <DSN or org/project>.
+Set up https://github.com/getsentry/tattletale to send my coding-agent sessions to a new Sentry project.
 ```
 
 Tattles on your coding agents. tattletale sends your Claude Code, Codex and OpenCode sessions to a Sentry project
