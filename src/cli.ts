@@ -5,6 +5,8 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listClaudeSessions } from "./claude.ts";
 import { listCodexSessions } from "./codex.ts";
+import { listOpencodeSessions } from "./opencode.ts";
+import { opencodePluginPath, opencodePluginSource } from "./opencode-plugin.ts";
 import type { AgentName } from "./model.ts";
 import { fileSink, otlpEndpoint } from "./send.ts";
 import { buildSpans } from "./spans.ts";
@@ -46,7 +48,8 @@ const agentFlag = (v: unknown): AgentName | undefined => {
   if (!s) return undefined;
   if (s === "claude" || s === "claude-code") return "claude-code";
   if (s === "codex") return "codex";
-  throw new Error(`unknown agent ${s}`);
+  if (s === "opencode") return "opencode";
+  throw new Error(`unknown agent ${s} (claude, codex or opencode)`);
 };
 
 async function readStdin(timeoutMs = 2000): Promise<string> {
@@ -85,8 +88,9 @@ async function hook(eventArg?: string): Promise<void> {
     const data = input.trim() ? JSON.parse(input) : {};
     const transcriptPath: string | undefined = data.transcript_path ?? data.transcriptPath ?? undefined;
     const event: string | undefined = data.hook_event_name ?? data.hookEventName ?? eventArg;
+    const agent = transcriptPath ? detectAgent(transcriptPath) : data.agent === "opencode" ? "opencode" : undefined;
     enqueue({
-      agent: transcriptPath ? detectAgent(transcriptPath) : undefined,
+      agent,
       event,
       sessionId: data.session_id ?? data.sessionId ?? data.conversation_id,
       transcriptPath,
@@ -99,11 +103,7 @@ async function hook(eventArg?: string): Promise<void> {
     });
     child.unref();
     const config = loadConfig();
-    if (
-      config.claudeSource === "otel" &&
-      !config.disabled &&
-      !(transcriptPath && detectAgent(transcriptPath) === "codex")
-    )
+    if (config.claudeSource === "otel" && !config.disabled && agent !== "codex" && agent !== "opencode")
       await ensureRelay(config.relayPort);
   } catch (err) {
     log(`hook failed: ${(err as Error)?.stack ?? err}`);
@@ -216,16 +216,24 @@ function install(flags: Record<string, unknown>): void {
     // Hooks run under GUI apps whose PATH often lacks node; hooks/run.sh reads this.
     writeFileSync(join(home(), "node-path"), process.execPath);
   }
-  const onlyClaude = flags.claude === true;
-  const onlyCodex = flags.codex === true;
-  if (!onlyCodex && which("claude")) {
+  const only = ["claude", "codex", "opencode"].filter((a) => flags[a] === true);
+  const wants = (agent: string) => (only.length ? only.includes(agent) : which(agent));
+  if (wants("claude")) {
     run("claude", ["plugin", "marketplace", "add", root], dry);
     run("claude", ["plugin", "install", `${PLUGIN}@${PLUGIN}`, "--scope", "user"], dry);
   }
-  if (!onlyClaude && which("codex")) {
+  if (wants("codex")) {
     run("codex", ["plugin", "marketplace", "add", root], dry);
     run("codex", ["plugin", "add", `${PLUGIN}@${PLUGIN}`], dry);
     console.log("Codex asks you to trust new hooks: open Codex and approve them under /hooks.");
+  }
+  if (wants("opencode")) {
+    const path = opencodePluginPath();
+    console.log(`${dry ? "would write" : "wrote"} OpenCode plugin ${path} (applies to sessions started afterwards)`);
+    if (!dry) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, opencodePluginSource(join(root, "hooks", "run.sh")));
+    }
   }
 }
 
@@ -235,6 +243,11 @@ function uninstall(flags: Record<string, unknown>): void {
   run("claude", ["plugin", "marketplace", "remove", PLUGIN], dry);
   run("codex", ["plugin", "remove", `${PLUGIN}@${PLUGIN}`], dry);
   run("codex", ["plugin", "marketplace", "remove", PLUGIN], dry);
+  const opencode = opencodePluginPath();
+  if (existsSync(opencode)) {
+    console.log(`${dry ? "would remove" : "removed"} ${opencode}`);
+    if (!dry) rmSync(opencode);
+  }
 }
 
 function status(): void {
@@ -259,8 +272,10 @@ function status(): void {
 function sessionsFor(agent: AgentName | undefined, days: number): { path: string; agent: AgentName }[] {
   const since = Date.now() - days * 86_400_000;
   const out: { path: string; agent: AgentName }[] = [];
-  if (agent !== "codex") for (const path of listClaudeSessions(since)) out.push({ path, agent: "claude-code" });
-  if (agent !== "claude-code") for (const path of listCodexSessions(since)) out.push({ path, agent: "codex" });
+  const want = (a: AgentName) => !agent || agent === a;
+  if (want("claude-code")) for (const path of listClaudeSessions(since)) out.push({ path, agent: "claude-code" });
+  if (want("codex")) for (const path of listCodexSessions(since)) out.push({ path, agent: "codex" });
+  if (want("opencode")) for (const path of listOpencodeSessions(since)) out.push({ path, agent: "opencode" });
   return out;
 }
 
@@ -306,13 +321,13 @@ function verify(paths: string[], flags: Record<string, unknown>): number {
 
 const DOCS = "https://github.com/getsentry/tattletale#readme";
 
-const HELP = `tattletale: tattles on your coding agents. It sends Claude Code and Codex sessions to Sentry agent
+const HELP = `tattletale: tattles on your coding agents. It sends Claude Code, Codex and OpenCode sessions to Sentry agent
 tracing as gen_ai spans: conversations, model calls, tool calls, exact tokens.
 
 Get started (or ask your agent to "set up tattletale"; the plugin ships a setup skill):
   1. tattletale setup --dsn <SENTRY_DSN>                    the only thing it needs: the Sentry project's DSN
      optional scope: --include ~/code/terra (a folder), --repo getsentry/terra (a repo, any worktree)
-  2. tattletale install                                      hook into Claude Code and Codex
+  2. tattletale install                                      hook into Claude Code, Codex and OpenCode
   3. tattletale status                                       confirm; Codex then asks you to approve hooks (/hooks)
   Check the data locally first (sends nothing): tattletale verify --days 7
   Replay older sessions: tattletale replay --since 2026-10-01 --dry-run (then without --dry-run)
@@ -321,15 +336,15 @@ Setup
   setup --dsn <dsn> [--include <path>|repo:<owner/name>]... [--repo <owner/name>]... [--ignore <rule>]...
         [--everything] [--content full|metadata] [--environment <env>]
                                             no --include/--repo: every session; --everything clears the scope
-  install [--claude|--codex] [--print]      install the hooks plugin into your agents (--print: show, don't run)
+  install [--claude|--codex|--opencode] [--print]   install the hooks into your agents (--print: show, don't run)
   install --otel [--print] [--force]        Claude Code via its native OpenTelemetry and a local relay
   uninstall [--otel] [--print]
   status                                    config, what was sent, relay, recent log
 
 Data
-  verify [<transcript>...] [--days 30] [--agent claude|codex] [--verbose]   token reconciliation, sends nothing
+  verify [<transcript>...] [--days 30] [--agent claude|codex|opencode] [--verbose]   token reconciliation, sends nothing
   replay [<file|folder>...] [--days 7 | --since <date>] [--until <date>] [--session <id>]...
-         [--agent claude|codex] [--limit N] [--dry-run]                 send past sessions (alias: backfill)
+         [--agent claude|codex|opencode] [--limit N] [--dry-run]                 send past sessions (alias: backfill)
                                             dates: 2026-10-01 or 30d; folders are searched for transcripts
   sync <transcript> [--final] [--dry-run] [--sink file:<path>]              send one session now
   spans <transcript> [--final]              print the spans that would be sent

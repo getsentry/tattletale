@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claudeUsage } from "./claude.ts";
 import { codexUsage, hasTaskStarted } from "./codex.ts";
+import { naiveOpencode } from "./opencode.ts";
 import type { AgentName, Usage } from "./model.ts";
 import { addUsage, sumCalls } from "./model.ts";
 import { buildSpans, spanAttr } from "./spans.ts";
@@ -96,6 +97,21 @@ export function verifyTranscript(path: string, agent: AgentName = detectAgent(pa
         detail: `cost-state ${fmt(ref)} | transcript ${fmt(parsedAll)} | gap ${gap}`,
       });
     }
+  } else if (agent === "opencode") {
+    const naive = naiveOpencode(path);
+    ownedCallIds = naive.ids;
+    checks.push({
+      name: "calls usage = every step-finish, read naively",
+      ok: sameUsage(parsedAll, naive.usage),
+      detail: `parsed ${fmt(parsedAll)} | naive ${fmt(naive.usage)}`,
+    });
+    const ref = session.reference?.opencodeTotals;
+    if (ref)
+      checks.push({
+        name: "calls usage = OpenCode's own session totals",
+        ok: sameUsage(parsedAll, ref),
+        detail: `parsed ${fmt(parsedAll)} | opencode ${fmt(ref)}`,
+      });
   } else {
     const ref = session.reference?.cumulative;
     const withUnattributed = addUsage(parsedAll, session.diagnostics.unattributedUsage);

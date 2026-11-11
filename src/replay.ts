@@ -6,6 +6,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { listClaudeSessions } from "./claude.ts";
 import { listCodexSessions } from "./codex.ts";
+import { isOpencodeSnapshot, listOpencodeSessions } from "./opencode.ts";
 import type { AgentName } from "./model.ts";
 import { detectAgent } from "./sync.ts";
 
@@ -30,7 +31,7 @@ function walk(dir: string, out: string[]): void {
     // A Claude session's subagents are read together with its main transcript.
     if (st.isDirectory()) {
       if (name !== "subagents") walk(path, out);
-    } else if (TRANSCRIPT.test(name)) out.push(path);
+    } else if (TRANSCRIPT.test(name) || isOpencodeSnapshot(path)) out.push(path);
   }
 }
 
@@ -51,8 +52,10 @@ export function replayTargets(opts: ReplayOptions): ReplayTarget[] {
       else paths.push(p);
     }
   } else {
-    if (opts.agent !== "codex") paths.push(...listClaudeSessions(opts.since ?? 0));
-    if (opts.agent !== "claude-code") paths.push(...listCodexSessions(opts.since ?? 0));
+    const want = (a: AgentName) => !opts.agent || opts.agent === a;
+    if (want("claude-code")) paths.push(...listClaudeSessions(opts.since ?? 0));
+    if (want("codex")) paths.push(...listCodexSessions(opts.since ?? 0));
+    if (want("opencode")) paths.push(...listOpencodeSessions(opts.since ?? 0));
   }
   paths = [...new Set(paths)];
   const items = paths

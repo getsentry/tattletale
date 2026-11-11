@@ -1,9 +1,10 @@
 // Parse a transcript, build spans, send only what the ledger hasn't seen. Safe to run any number of times.
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { listClaudeSessions, parseClaude } from "./claude.ts";
 import { listCodexSessions, parseCodex } from "./codex.ts";
+import { isOpencodeSnapshot, listOpencodeSessions, opencodeSnapshot, parseOpencode } from "./opencode.ts";
 import type { AgentName, ParseOptions, Session } from "./model.ts";
 import { batches, sentrySink } from "./send.ts";
 import type { Sink } from "./send.ts";
@@ -31,10 +32,12 @@ import { inScope, repoOf } from "./scope.ts";
 import { VERSION } from "./version.ts";
 
 export function detectAgent(path: string): AgentName {
+  if (isOpencodeSnapshot(path)) return "opencode";
   return /(^|\/)\.codex\/|rollout-[^/]*\.jsonl/.test(path) ? "codex" : "claude-code";
 }
 
 export function parseSession(path: string, agent: AgentName = detectAgent(path), opts: ParseOptions = {}): Session {
+  if (agent === "opencode") return parseOpencode(path, opts);
   return agent === "codex" ? parseCodex(path, opts) : parseClaude(path, opts);
 }
 
@@ -226,7 +229,7 @@ const FINAL_EVENTS = new Set(["Stop", "SessionEnd", "stop", "sessionEnd"]);
  */
 export function sweepCandidates(days: number, marks: Record<string, FileMark>): { path: string; agent: AgentName }[] {
   const since = Date.now() - days * 86_400_000;
-  const paths = new Set([...listClaudeSessions(since), ...listCodexSessions(since)]);
+  const paths = new Set([...listClaudeSessions(since), ...listCodexSessions(since), ...listOpencodeSessions(since)]);
   for (const [path, mark] of Object.entries(marks)) if (!mark.settled && existsSync(path)) paths.add(path);
   return [...paths]
     .filter((path) => {
@@ -317,14 +320,22 @@ export async function runWorker(sweepDays = 2): Promise<void> {
         let sweep = false;
         for (const job of jobs) {
           if (job.event === "SessionStart" || job.event === "sessionStart" || job.event === "sweep") sweep = true;
-          if (!job.transcriptPath) continue;
-          const entry = byPath.get(job.transcriptPath) ?? {
-            path: job.transcriptPath,
-            agent: job.agent as AgentName | undefined,
-            final: false,
-          };
-          entry.final ||= FINAL_EVENTS.has(job.event ?? "");
-          byPath.set(job.transcriptPath, entry);
+          let path = job.transcriptPath;
+          // OpenCode has no transcript file: its plugin names the session, and we snapshot it from its database.
+          if (!path && job.agent === "opencode" && job.sessionId) {
+            try {
+              path = opencodeSnapshot(job.sessionId);
+            } catch (err) {
+              log(`opencode snapshot of ${job.sessionId} failed: ${(err as Error)?.stack ?? err}`);
+              await reportError(err, { stage: "opencode-snapshot", agent: "opencode" });
+            }
+          }
+          if (!path) continue;
+          const entry = byPath.get(path) ?? { path, agent: job.agent as AgentName | undefined, final: false };
+          // A subagent's session going idle doesn't end its parent's turn.
+          const own = job.agent !== "opencode" || basename(path) === `${job.sessionId}.json`;
+          entry.final ||= own && FINAL_EVENTS.has(job.event ?? "");
+          byPath.set(path, entry);
         }
         const reports = await syncMany([...byPath.values()]);
         for (const r of reports)

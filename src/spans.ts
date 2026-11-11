@@ -141,6 +141,7 @@ function toolDetails(tool: ToolCall): Attrs {
     if (typeof args.file_path === "string") attrs["agent.tool.file_path"] = args.file_path;
     else if (typeof args.notebook_path === "string") attrs["agent.tool.file_path"] = args.notebook_path;
     else if (typeof args.path === "string") attrs["agent.tool.file_path"] = args.path;
+    else if (typeof args.filePath === "string") attrs["agent.tool.file_path"] = args.filePath;
     if (typeof args.command === "string") attrs["agent.tool.command"] = clean(args.command, 300);
     else if (Array.isArray(args.command)) attrs["agent.tool.command"] = clean(args.command.join(" "), 300);
     else if (typeof args.cmd === "string") attrs["agent.tool.command"] = clean(args.cmd, 300);

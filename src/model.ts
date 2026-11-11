@@ -1,6 +1,6 @@
 // Agent-agnostic session model. Parsers map each agent's transcript onto it; spans.ts maps it onto Sentry.
 
-export type AgentName = "claude-code" | "codex";
+export type AgentName = "claude-code" | "codex" | "opencode";
 
 /** Token usage in Sentry's convention: `input` includes cache reads and cache writes, `output` includes reasoning. */
 export interface Usage {
@@ -148,6 +148,8 @@ export interface Session {
   reference?: {
     /** Codex: cumulative total at the end minus the inherited baseline. */
     cumulative?: Usage;
+    /** OpenCode's own token totals per session, summed over the session and its subagents. */
+    opencodeTotals?: Usage;
     /** Claude Code `cost-state` record, when present. */
     claudeCostState?: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>;
   };

@@ -1,7 +1,7 @@
 # tattletale
 
-Tattles on your coding agents. tattletale sends your Claude Code and Codex sessions to a Sentry project as
-agent traces:
+Tattles on your coding agents. tattletale sends your Claude Code, Codex and OpenCode sessions to a Sentry project
+as agent traces:
 
 - one conversation per session;
 - a span per model call, with exact input, cache and output tokens;
@@ -14,18 +14,20 @@ Then you, or an agent, can find where tokens go in Sentry's Explore → Conversa
 **All it needs is the DSN of the Sentry project to send to.** It runs on Node 22.18 or later and has no
 runtime dependencies.
 
-> Private and experimental for now. It will be published as `@sentry/tattletale`. Until then, clone the repo and
-> use `node ~/code/tattletale/src/cli.ts` wherever this page says `npx @sentry/tattletale`.
+> Experimental. Published on npm as [`@sentry/tattletale`](https://www.npmjs.com/package/@sentry/tattletale).
 
 ## Quick start
 
 ```bash
 npx @sentry/tattletale setup --dsn '<SENTRY_DSN>'   # optionally scope it, see below
-npx @sentry/tattletale install                     # hook into Claude Code and Codex
+npx @sentry/tattletale install                     # hook into Claude Code, Codex and OpenCode
 npx @sentry/tattletale status
 ```
 
-Codex asks you, once, to approve the new hooks under `/hooks`. New sessions show up in Sentry within minutes.
+`install` sets up whichever of the three agents you have (or pick with `--claude`, `--codex`, `--opencode`).
+Codex asks you, once, to approve the new hooks under `/hooks`. OpenCode gets a plugin file in
+`~/.config/opencode/plugins/` and picks it up in sessions started afterwards. New sessions show up in Sentry
+within minutes.
 
 ### Or let your agent do it
 
@@ -72,7 +74,8 @@ npx @sentry/tattletale replay ~/Downloads/old-transcripts     # files or folders
 - **Oldest first.** Sessions are replayed in age order, so an original session claims history that a later
   fork copied.
 - **Files and folders count as finished.** Explicit files or folders are treated as complete sessions. Folders
-  are searched for `*.jsonl` and `*.jsonl.zst`, with Codex archives included.
+  are searched for `*.jsonl` and `*.jsonl.zst`, with Codex archives included, and for OpenCode exports
+  (`ses_*.json`, as written by `opencode export`). Without paths, OpenCode sessions are read from its database.
 
 **Limits:**
 
@@ -109,6 +112,12 @@ nothing. On a hook, at most every 5 minutes, the worker also sweeps:
 
 A transcript that crashes tattletale is reported as an error and left alone until it changes or tattletale is
 upgraded.
+
+**OpenCode** has no transcript file: it keeps every session in one SQLite database
+(`~/.local/share/opencode/opencode.db`). Its plugin only tells the hook which session changed. tattletale opens the
+database read-only, writes the session and its subagents (child sessions) to `~/.tattletale/opencode/<id>.json`,
+shaped like `opencode export` output and stamped with the session's last activity, and from there treats it like
+any other transcript.
 
 Only one process sends at a time on a machine (hook workers, `replay`, `sync`). Each re-reads the ledger
 under that lock, so two of them never send the same span.
@@ -160,16 +169,16 @@ twice:
 
 ## Guarantees and how they're checked
 
-| Guarantee                                | Mechanism                                                                                                                                                                                                                                                                                           | Check                                                                                                          |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Each API response counted once           | Claude: dedup by `message.id` (one response spans several lines). Codex: `token_usage_record` per response, else deltas of the cumulative `token_count` (repeats ignored)                                                                                                                           | `verify`: parser vs a naive count over the raw files, on every local session                                   |
-| Resumed/forked history not re-sent       | Claude copies keep the parent's `sessionId` and are skipped. Fork subagents' copies are claimed by the first file. Codex: everything before the first own `task_started` is inherited                                                                                                               | tests; `verify` session-wide union check                                                                       |
-| Copies with rewritten IDs not re-sent    | Span IDs come only from globally unique call/tool/prompt IDs, so the ledger dedups across sessions                                                                                                                                                                                                  | test `rewritten copy`                                                                                          |
-| Tokens match Sentry's convention         | `input` includes cache reads and writes (Anthropic's doesn't). Claude cache writes split 5m/1h. Claude thinking tokens and Codex reasoning tokens reported separately                                                                                                                               | `verify`: chat-span sums = parser; E2E: Sentry aggregates = transcript = Claude's own cost-state, to the token |
-| Never double sent after a crash          | The batch in flight is written to `pending/`; on recovery its IDs are marked unverified and never re-sent (at-most-once)                                                                                                                                                                            | test `crash between send and ledger write`                                                                     |
-| Never double sent after a lost answer    | A request that may have reached Sentry (timeout, connection dropped after the upload) is treated like a crash: its spans are marked unverified and never re-sent, because Sentry only folds a repeated span into the first for seconds. One that can't have left (offline, DNS, refused) is retried | test `real sockets`                                                                                            |
-| Never double sent by two processes       | One send lock per machine; the ledger is re-read under it, so a `replay` next to the hook worker can't re-send what the other sent                                                                                                                                                                  | test `two processes`                                                                                           |
-| Failures don't lose data or loop forever | A failed send (network, outage, rate limit, refused DSN) leaves the ledger untouched and the session unsettled; the sweep retries it on a later hook, however old it is by then. Only a payload Sentry rejects (400, 413, 422) is bisected, and the one bad span skipped                            | tests                                                                                                          |
+| Guarantee                                | Mechanism                                                                                                                                                                                                                                                                                           | Check                                                                                                                                                                    |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Each API response counted once           | Claude: dedup by `message.id` (one response spans several lines). Codex: `token_usage_record` per response, else deltas of the cumulative `token_count` (repeats ignored). OpenCode: one call per `step-finish`, keyed on OpenCode's own message/part IDs; a request still streaming isn't sent     | `verify`: parser vs a naive count over the raw files, on every local session                                                                                             |
+| Resumed/forked history not re-sent       | Claude copies keep the parent's `sessionId` and are skipped. Fork subagents' copies are claimed by the first file. Codex: everything before the first own `task_started` is inherited                                                                                                               | tests; `verify` session-wide union check                                                                                                                                 |
+| Copies with rewritten IDs not re-sent    | Span IDs come only from globally unique call/tool/prompt IDs, so the ledger dedups across sessions                                                                                                                                                                                                  | test `rewritten copy`                                                                                                                                                    |
+| Tokens match Sentry's convention         | `input` includes cache reads and writes (Anthropic's doesn't). Claude cache writes split 5m/1h. Claude thinking tokens and Codex reasoning tokens reported separately. OpenCode's `input` excludes cache and its `output` excludes reasoning; both are added back                                   | `verify`: chat-span sums = parser; E2E: Sentry aggregates = transcript = Claude's own cost-state, to the token; Codex and OpenCode calls = OpenRouter's billing per call |
+| Never double sent after a crash          | The batch in flight is written to `pending/`; on recovery its IDs are marked unverified and never re-sent (at-most-once)                                                                                                                                                                            | test `crash between send and ledger write`                                                                                                                               |
+| Never double sent after a lost answer    | A request that may have reached Sentry (timeout, connection dropped after the upload) is treated like a crash: its spans are marked unverified and never re-sent, because Sentry only folds a repeated span into the first for seconds. One that can't have left (offline, DNS, refused) is retried | test `real sockets`                                                                                                                                                      |
+| Never double sent by two processes       | One send lock per machine; the ledger is re-read under it, so a `replay` next to the hook worker can't re-send what the other sent                                                                                                                                                                  | test `two processes`                                                                                                                                                     |
+| Failures don't lose data or loop forever | A failed send (network, outage, rate limit, refused DSN) leaves the ledger untouched and the session unsettled; the sweep retries it on a later hook, however old it is by then. Only a payload Sentry rejects (400, 413, 422) is bisected, and the one bad span skipped                            | tests                                                                                                                                                                    |
 
 Results on this machine: `verify` passes on all 1,124 local sessions (Claude and Codex, Apr–Nov 2026).
 The E2E run against Sentry matched to the token.
@@ -186,15 +195,19 @@ The E2E run against Sentry matched to the token.
 - `execute_tool` spans:
   - `agent.tool.result_bytes`, `agent.tool.result_tokens_est`
   - `agent.tool.file_path`, `agent.tool.command`, `agent.tool.mcp_server`
+  - `agent.tool.calls`: the tools a Codex code-mode `exec` script calls (`exec_command,apply_patch`), since
+    Codex now routes most tool use through that one tool
 - Turn and subagent roots: `agent.turn.*` / `agent.subagent.*` totals. Compactions get `compact` spans
   with pre- and post-compaction token counts.
 
 ## Known gaps
 
-- Agents: only Claude Code and Codex. Cursor transcripts have no tokens or timestamps, so it would need
-  hook payloads. OpenCode and Copilot aren't done.
-- Model calls an agent makes without writing them to the transcript (titles, safety checks) are invisible.
-  `verify` reports the gap against Claude's `cost-state` record when one exists.
+- Agents: Claude Code, Codex and OpenCode (its SQLite-era releases, 1.x). Cursor transcripts have no tokens or
+  timestamps, so it would need hook payloads. Copilot isn't done.
+- Model calls an agent makes without writing them to the transcript are invisible: Claude's safety checks,
+  OpenCode's session-title requests (about 550 tokens each, on its small model). `verify` reports the gap
+  against Claude's `cost-state` record when one exists.
+- An OpenCode request cut off mid-stream has no recorded usage and is not sent.
 - A batch whose send got no answer, or was in flight during a crash, is never re-sent. If it had not arrived,
   those spans (up to 200) are missing. `status` counts them as unverified.
 - Sentry's computed cost has a single cache-write price. Claude's 1h cache writes cost more, so Sentry
