@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Support OpenCode by @gricha in [be0e3e8b](https://github.com/getsentry/tattletale/commit/be0e3e8b6b79fb05427cffd92fc715bcc0635fdc)
+- Codex code mode: name the tools an exec script calls by @gricha in [78192601](https://github.com/getsentry/tattletale/commit/7819260136ef8bbdc0bbeabd630e587a82d02c2f)
+
 ## 0.3.4
 
 - Relay: don't re-send a batch Sentry may already have by @gricha in [a71cbc39](https://github.com/getsentry/tattletale/commit/a71cbc3900aa5d9891b16792dfa83894c1373b08)
