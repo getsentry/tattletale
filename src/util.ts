@@ -49,8 +49,36 @@ function* lineBuffers(path: string): Generator<Buffer> {
   }
 }
 
-/** A JSON string that is one long base64 run, optionally a data: URI: an image. Never sent, so never parsed. */
-const BASE64_VALUE = /"(?:data:[\w.+-]+\/[\w.+-]+;base64,)?[A-Za-z0-9+/]{4096,}={0,2}"/g;
+const DATA_PREFIX = /data:[\w.+-]+\/[\w.+-]+;base64,/y;
+const isBase64 = (c: number) =>
+  (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 43 || c === 47;
+
+/**
+ * Replaces every JSON string that is one long base64 run (4096+ chars, optionally a data: URI), i.e. an image,
+ * with "[base64 N chars]". Images are never sent, so never parsed. A loop, because V8's regex overflows the
+ * stack on runs of several million characters.
+ */
+function stripBase64(line: string): string {
+  let out = "";
+  let from = 0;
+  let i = line.indexOf('"');
+  while (i !== -1) {
+    let j = i + 1;
+    DATA_PREFIX.lastIndex = j;
+    if (DATA_PREFIX.test(line)) j = DATA_PREFIX.lastIndex;
+    const start = j;
+    while (j < line.length && isBase64(line.charCodeAt(j))) j++;
+    const run = j - start;
+    if (line.charCodeAt(j) === 61) j++;
+    if (line.charCodeAt(j) === 61) j++;
+    if (run >= 4096 && line.charCodeAt(j) === 34) {
+      out += `${line.slice(from, i)}"[base64 ${j - i - 1} chars]"`;
+      from = j + 1;
+      i = line.indexOf('"', from);
+    } else i = line.indexOf('"', i + 1);
+  }
+  return from ? out + line.slice(from) : line;
+}
 
 export interface JsonlStats {
   badLines: number;
@@ -63,7 +91,7 @@ export interface JsonlStats {
 export function* jsonlRecords(path: string, stats: JsonlStats = { badLines: 0 }): Generator<any> {
   for (const buf of lineBuffers(path)) {
     let line = buf.toString("utf8");
-    if (line.length > 4096) line = line.replace(BASE64_VALUE, (m) => `"[base64 ${m.length - 2} chars]"`);
+    if (line.length > 4096) line = stripBase64(line);
     if (!line.trim()) continue;
     let rec: unknown;
     try {

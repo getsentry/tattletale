@@ -56,3 +56,12 @@ test("jsonl streaming: lines across chunk boundaries, images replaced, everythin
   assert.equal(recs[1].short, "QUJD");
   assert.equal(recs[2].note, `say "${"B".repeat(5000)}"`, "base64-looking text inside a sentence is kept");
 });
+
+test("jsonl streaming: an image too long for a regex (8M chars) is still replaced", () => {
+  const path = join(freshHome(), "t.jsonl");
+  const image = "iVBORw0K+/".repeat(800_000);
+  writeFileSync(path, JSON.stringify({ n: 1, url: `data:image/png;base64,${image}==`, detail: "high" }) + "\n");
+  const recs = [...jsonlRecords(path)];
+  assert.equal(recs[0].url, `[base64 ${image.length + 24} chars]`);
+  assert.equal(recs[0].detail, "high");
+});
