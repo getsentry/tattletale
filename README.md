@@ -188,11 +188,10 @@ twice:
 | Never double sent by two processes       | One send lock per machine; the ledger is re-read under it, so a `replay` next to the hook worker can't re-send what the other sent                                                                                                                                                                  | test `two processes`                                                                                                                                                     |
 | Failures don't lose data or loop forever | A failed send (network, outage, rate limit, refused DSN) leaves the ledger untouched and the session unsettled; the sweep retries it on a later hook, however old it is by then. Only a payload Sentry rejects (400, 413, 422) is bisected, and the one bad span skipped                            | tests                                                                                                                                                                    |
 
-Results on the author's machine (2026-11-11): `verify` passes on 2,110 of 2,113 local sessions (1,081 Claude
-Code and Codex, Apr–Nov 2026; 1,032 OpenCode). The three failures are open bugs: two Codex archives with huge
-inline images crash the parser, and a Claude session whose subagent never finished leaves that subagent's spans
-without a parent. The E2E runs against Sentry (Claude Code on this machine, Codex and OpenCode in containers
-against OpenRouter) matched to the token.
+Results on the author's machine (2026-11-11): `verify` passes on all 2,113 local sessions (1,081 Claude Code and
+Codex, Apr–Nov 2026; 1,032 OpenCode). A session still running can fail it for the moment: its file grows between
+the two reads, and a subagent still at work has no root span yet. The E2E runs against Sentry (Claude Code on
+this machine, Codex and OpenCode in containers against OpenRouter) matched to the token.
 
 ## Token-analysis attributes
 
