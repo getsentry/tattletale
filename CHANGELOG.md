@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.1
+
+### Documentation 📚
+
+- OpenCode in plugin manifests, release steps, fresh verify results by @gricha in [d9dadca3](https://github.com/getsentry/tattletale/commit/d9dadca38ecdcfc1edc3e57e3a171f4939ecfcc0)
+
+### Other
+
+- README: verify results after the image fix by @gricha in [e193e505](https://github.com/getsentry/tattletale/commit/e193e505fd57c0c1c59183d100a05827b49198b1)
+- Don't crash on images of several million characters by @gricha in [b735744b](https://github.com/getsentry/tattletale/commit/b735744bedc7e7b464346e030ec55ead790ebc15)
+- README: copy-paste setup prompt for agents by @gricha in [94583c5c](https://github.com/getsentry/tattletale/commit/94583c5c99e7141a83591fe4e621eba8615842cc)
+
 ## 0.4.0
 
 - Support OpenCode by @gricha in [be0e3e8b](https://github.com/getsentry/tattletale/commit/be0e3e8b6b79fb05427cffd92fc715bcc0635fdc)
