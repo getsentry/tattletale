@@ -16,8 +16,9 @@ dotagents and warden.
 
    It then uploads the tarball as the `npm-package` artifact.
 
-4. Once the publish request is approved, craft publishes that tarball to npm with public access and creates the
-   GitHub release.
+4. Approve the publish request by labelling the getsentry/publish issue `accepted`. That can happen right away:
+   the publisher waits for the release branch's CI. craft then publishes the tarball to npm with public access,
+   creates the GitHub release and merges the release branch back to main.
 
 The repo is private while this is experimental. **Publishing makes the package, and therefore its compiled
 source, public on npm.** The release workflow needs the org's `SENTRY_RELEASE_BOT_CLIENT_ID` variable and
@@ -35,8 +36,9 @@ pnpm pack && node scripts/verify-pack.mjs .  # what CI checks before publishing
 The plugins are installed from the GitHub repo:
 `claude plugin marketplace add getsentry/tattletale` and `codex plugin marketplace add getsentry/tattletale`.
 
-To ship a change locally:
+After a release has merged back to main, update both:
 
-1. Bump the version and push.
-2. Run `claude plugin marketplace update tattletale && claude plugin update tattletale@tattletale` and
-   `codex plugin add tattletale@tattletale`.
+```bash
+claude plugin marketplace update tattletale && claude plugin update tattletale@tattletale
+codex plugin marketplace upgrade tattletale && codex plugin add tattletale@tattletale
+```

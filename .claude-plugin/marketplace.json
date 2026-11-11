@@ -5,7 +5,7 @@
     {
       "name": "tattletale",
       "source": "./",
-      "description": "Ship Claude Code sessions to Sentry agent tracing."
+      "description": "Send Claude Code, Codex and OpenCode sessions to Sentry agent tracing."
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
   "name": "tattletale",
   "version": "0.4.0",
-  "description": "Ship Claude Code sessions to Sentry agent tracing (gen_ai spans): conversations, model calls, tools, tokens."
+  "description": "Send your coding-agent sessions (Claude Code, Codex, OpenCode) to Sentry agent tracing as gen_ai spans: conversations, model calls, tools, exact tokens."
 }

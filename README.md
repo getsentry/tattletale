@@ -93,14 +93,16 @@ pnpm check   # tsc (strict) + oxlint + oxfmt --check + tests
 pnpm build   # dist/ (what npm ships; Node won't strip types under node_modules)
 ```
 
-Releases go through craft. See [RELEASING.md](RELEASING.md).
+`scripts/` holds one-off token analyses over local transcripts (`token-waste.ts`, `cache-causes.py`, …); each
+prints its usage at the top. Releases go through craft. See [RELEASING.md](RELEASING.md).
 
 ## How it works
 
 ```
-agent hook (SessionStart / Stop / SubagentStop / SessionEnd, async)
+agent hook (Claude Code, Codex: SessionStart / Stop / SubagentStop / SessionEnd, async;
+            OpenCode plugin: session.created / session.idle)
   └─ hooks/run.sh → cli.ts hook    queue a job, spawn a detached worker, exit 0 (never blocks the agent)
-       worker: parse whole transcript → build spans with deterministic IDs → take the send lock
+       worker: stream the transcript → build spans with deterministic IDs → take the send lock
                → drop IDs already in ~/.tattletale/sent.log → send new ones (OTLP/HTTP JSON) → append to ledger
 ```
 
@@ -180,8 +182,11 @@ twice:
 | Never double sent by two processes       | One send lock per machine; the ledger is re-read under it, so a `replay` next to the hook worker can't re-send what the other sent                                                                                                                                                                  | test `two processes`                                                                                                                                                     |
 | Failures don't lose data or loop forever | A failed send (network, outage, rate limit, refused DSN) leaves the ledger untouched and the session unsettled; the sweep retries it on a later hook, however old it is by then. Only a payload Sentry rejects (400, 413, 422) is bisected, and the one bad span skipped                            | tests                                                                                                                                                                    |
 
-Results on this machine: `verify` passes on all 1,124 local sessions (Claude and Codex, Apr–Nov 2026).
-The E2E run against Sentry matched to the token.
+Results on the author's machine (2026-11-11): `verify` passes on 2,110 of 2,113 local sessions (1,081 Claude
+Code and Codex, Apr–Nov 2026; 1,032 OpenCode). The three failures are open bugs: two Codex archives with huge
+inline images crash the parser, and a Claude session whose subagent never finished leaves that subagent's spans
+without a parent. The E2E runs against Sentry (Claude Code on this machine, Codex and OpenCode in containers
+against OpenRouter) matched to the token.
 
 ## Token-analysis attributes
 
