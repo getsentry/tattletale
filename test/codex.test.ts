@@ -228,3 +228,36 @@ test("a later response's usage never lands on an older call that lost its own", 
   assert.deepEqual([y.usage!.input, y.usage!.output], [1500, 30]);
   assert.ok(y.end - y.start < 10_000, "Y's span is not stretched to an unrelated event");
 });
+
+test("code mode: an exec script's inner tools and first command are named on its tool span", () => {
+  const script =
+    'const r = await tools.exec_command({cmd:"sed -n \'1,200p\' calc.py",workdir:"/work/proj"});\n' +
+    'const p = await tools.apply_patch("*** Begin Patch");\nawait tools.exec_command({cmd:"python3 -m pytest"});';
+  const path = file([
+    meta(),
+    started(1),
+    user(1, "fix calc"),
+    rec(2, "response_item", {
+      type: "custom_tool_call",
+      call_id: "call_js",
+      name: "exec",
+      namespace: "functions",
+      input: script,
+    }),
+    record(2, "resp_1", u(1000, 0, 40)),
+    rec(3, "response_item", {
+      type: "custom_tool_call_output",
+      call_id: "call_js",
+      output: [{ type: "input_text", text: "Script completed" }],
+    }),
+    say(4, "fixed"),
+    record(4, "resp_2", u(1100, 900, 10)),
+    complete(5),
+  ]);
+  const tool = buildSpans(parseCodex(path), { content: "full", environment: "test" }).find(
+    (s) => spanAttr(s, "gen_ai.operation.name") === "execute_tool",
+  )!;
+  assert.equal(spanAttr(tool, "gen_ai.tool.name"), "functions__exec");
+  assert.equal(spanAttr(tool, "agent.tool.calls"), "exec_command,apply_patch");
+  assert.equal(spanAttr(tool, "agent.tool.command"), "sed -n '1,200p' calc.py");
+});

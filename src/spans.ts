@@ -146,6 +146,16 @@ function toolDetails(tool: ToolCall): Attrs {
     else if (typeof args.cmd === "string") attrs["agent.tool.command"] = clean(args.cmd, 300);
     if (typeof args.pattern === "string") attrs["agent.tool.pattern"] = clean(args.pattern, 300);
     if (typeof args.subagent_type === "string") attrs["agent.tool.subagent_type"] = args.subagent_type;
+  } else if (typeof args === "string" && /(^|__)exec$/.test(tool.name)) {
+    // Codex code mode: one JS `exec` tool runs a script that calls the real tools (`tools.exec_command(...)`).
+    const calls = [...new Set([...args.matchAll(/\btools\.([A-Za-z_]\w*)\s*\(/g)].map((m) => m[1]!))];
+    if (calls.length) attrs["agent.tool.calls"] = calls.join(",");
+    const cmd = /\bcmd\s*:\s*("(?:[^"\\]|\\.)*")/.exec(args)?.[1];
+    if (cmd) {
+      try {
+        attrs["agent.tool.command"] = clean(JSON.parse(cmd), 300);
+      } catch {}
+    }
   }
   return attrs;
 }
