@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- Support Pi by @gricha in [6a6b2007](https://github.com/getsentry/tattletale/commit/6a6b200791766f50d5869a4aac9bdab525de4456)
+- README: setup prompt without placeholders by @gricha in [a37a685a](https://github.com/getsentry/tattletale/commit/a37a685a04b5f4fb8e1ffa1e1f226af1045f2c34)
+
 ## 0.4.1
 
 ### Documentation 📚
