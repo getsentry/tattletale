@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { claudeUsage } from "./claude.ts";
 import { codexUsage, hasTaskStarted } from "./codex.ts";
 import { naiveOpencode } from "./opencode.ts";
+import { naivePi } from "./pi.ts";
 import type { AgentName, Usage } from "./model.ts";
 import { addUsage, sumCalls } from "./model.ts";
 import { buildSpans, spanAttr } from "./spans.ts";
@@ -112,6 +113,14 @@ export function verifyTranscript(path: string, agent: AgentName = detectAgent(pa
         ok: sameUsage(parsedAll, ref),
         detail: `parsed ${fmt(parsedAll)} | opencode ${fmt(ref)}`,
       });
+  } else if (agent === "pi") {
+    const naive = naivePi(path);
+    ownedCallIds = naive.ids;
+    checks.push({
+      name: "calls usage = every usage record, read naively",
+      ok: sameUsage(parsedAll, naive.usage),
+      detail: `parsed ${fmt(parsedAll)} | naive ${fmt(naive.usage)}`,
+    });
   } else {
     const ref = session.reference?.cumulative;
     const withUnattributed = addUsage(parsedAll, session.diagnostics.unattributedUsage);

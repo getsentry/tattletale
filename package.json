@@ -1,7 +1,7 @@
 {
   "name": "@sentry/tattletale",
   "version": "0.4.1",
-  "description": "Tattles on your coding agents: ships Claude Code, Codex and OpenCode sessions to Sentry agent tracing as gen_ai spans.",
+  "description": "Tattles on your coding agents: ships Claude Code, Codex, OpenCode and Pi sessions to Sentry agent tracing as gen_ai spans.",
   "keywords": [
     "agent-tracing",
     "claude-code",
@@ -9,6 +9,7 @@
     "gen_ai",
     "opencode",
     "opentelemetry",
+    "pi",
     "sentry"
   ],
   "license": "MIT",

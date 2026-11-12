@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { listClaudeSessions, parseClaude } from "./claude.ts";
 import { listCodexSessions, parseCodex } from "./codex.ts";
 import { isOpencodeSnapshot, listOpencodeSessions, opencodeSnapshot, parseOpencode } from "./opencode.ts";
+import { isPiSession, listPiSessions, parsePi } from "./pi.ts";
 import type { AgentName, ParseOptions, Session } from "./model.ts";
 import { batches, sentrySink } from "./send.ts";
 import type { Sink } from "./send.ts";
@@ -33,11 +34,13 @@ import { VERSION } from "./version.ts";
 
 export function detectAgent(path: string): AgentName {
   if (isOpencodeSnapshot(path)) return "opencode";
+  if (isPiSession(path)) return "pi";
   return /(^|\/)\.codex\/|rollout-[^/]*\.jsonl/.test(path) ? "codex" : "claude-code";
 }
 
 export function parseSession(path: string, agent: AgentName = detectAgent(path), opts: ParseOptions = {}): Session {
   if (agent === "opencode") return parseOpencode(path, opts);
+  if (agent === "pi") return parsePi(path, opts);
   return agent === "codex" ? parseCodex(path, opts) : parseClaude(path, opts);
 }
 
@@ -229,7 +232,12 @@ const FINAL_EVENTS = new Set(["Stop", "SessionEnd", "stop", "sessionEnd"]);
  */
 export function sweepCandidates(days: number, marks: Record<string, FileMark>): { path: string; agent: AgentName }[] {
   const since = Date.now() - days * 86_400_000;
-  const paths = new Set([...listClaudeSessions(since), ...listCodexSessions(since), ...listOpencodeSessions(since)]);
+  const paths = new Set([
+    ...listClaudeSessions(since),
+    ...listCodexSessions(since),
+    ...listOpencodeSessions(since),
+    ...listPiSessions(since),
+  ]);
   for (const [path, mark] of Object.entries(marks)) if (!mark.settled && existsSync(path)) paths.add(path);
   return [...paths]
     .filter((path) => {

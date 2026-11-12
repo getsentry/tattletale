@@ -1,6 +1,6 @@
 // Agent-agnostic session model. Parsers map each agent's transcript onto it; spans.ts maps it onto Sentry.
 
-export type AgentName = "claude-code" | "codex" | "opencode";
+export type AgentName = "claude-code" | "codex" | "opencode" | "pi";
 
 /** Token usage in Sentry's convention: `input` includes cache reads and cache writes, `output` includes reasoning. */
 export interface Usage {

@@ -1,11 +1,11 @@
 ---
 name: setup-tattletale
-description: Set up, scope, verify or remove tattletale, which sends Claude Code, Codex and OpenCode sessions to Sentry agent tracing. Use when the user asks to set up, install, configure, scope, check or uninstall tattletale, or to send their coding-agent sessions to Sentry.
+description: Set up, scope, verify or remove tattletale, which sends Claude Code, Codex, OpenCode and Pi sessions to Sentry agent tracing. Use when the user asks to set up, install, configure, scope, check or uninstall tattletale, or to send their coding-agent sessions to Sentry.
 ---
 
 # Set up tattletale
 
-tattletale sends the user's Claude Code, Codex and OpenCode sessions to a Sentry project as agent traces: one
+tattletale sends the user's Claude Code, Codex, OpenCode and Pi sessions to a Sentry project as agent traces: one
 conversation per session, model calls with exact token usage, tool calls, and subagents. Everything below runs
 on the user's machine.
 
@@ -41,10 +41,12 @@ npx @sentry/tattletale setup --dsn '<DSN>' [scope flags from step 2]
 npx @sentry/tattletale install
 ```
 
-`install` adds lightweight hooks to whichever of Claude Code, Codex and OpenCode is installed (`--claude`,
-`--codex`, `--opencode` to pick). For Claude Code and Codex it shells out to `claude plugin …` and
-`codex plugin …`; for OpenCode it writes a plugin file to `~/.config/opencode/plugins/tattletale.js`, which
-OpenCode loads in sessions started afterwards. Hooks never block the agent.
+`install` adds lightweight hooks to whichever of Claude Code, Codex, OpenCode and Pi is installed (`--claude`,
+`--codex`, `--opencode`, `--pi` to pick). For Claude Code and Codex it shells out to `claude plugin …` and
+`codex plugin …`; for OpenCode it writes a plugin file to `~/.config/opencode/plugins/tattletale.js`, and for Pi
+an extension to `~/.pi/agent/extensions/tattletale.ts`. Both load in sessions started afterwards. Hooks never
+block the agent. If the user already has Sentry's `@sentry/pi` extension sending to the same org, tell them to
+keep only one of the two, or Pi sessions show up twice.
 Tell the user that Codex asks them, once, to approve the new hooks under `/hooks`. You can't approve them for
 them. Until then, Codex sessions are still sent, in batches whenever another agent's session starts.
 

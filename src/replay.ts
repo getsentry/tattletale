@@ -7,6 +7,7 @@ import { basename, join, resolve } from "node:path";
 import { listClaudeSessions } from "./claude.ts";
 import { listCodexSessions } from "./codex.ts";
 import { isOpencodeSnapshot, listOpencodeSessions } from "./opencode.ts";
+import { listPiSessions } from "./pi.ts";
 import type { AgentName } from "./model.ts";
 import { detectAgent } from "./sync.ts";
 
@@ -56,6 +57,7 @@ export function replayTargets(opts: ReplayOptions): ReplayTarget[] {
     if (want("claude-code")) paths.push(...listClaudeSessions(opts.since ?? 0));
     if (want("codex")) paths.push(...listCodexSessions(opts.since ?? 0));
     if (want("opencode")) paths.push(...listOpencodeSessions(opts.since ?? 0));
+    if (want("pi")) paths.push(...listPiSessions(opts.since ?? 0));
   }
   paths = [...new Set(paths)];
   const items = paths
